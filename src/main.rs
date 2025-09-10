@@ -23,7 +23,7 @@ async fn main() -> Result<()> {
     let xdp_program: &mut Xdp = program.try_into()?;
 
     xdp_program.load()?;
-    xdp_program.attach("eth0", XdpFlags::default())?;
+    xdp_program.attach("wlan0", XdpFlags::default())?;
 
     info!("eBPF program attached");
 
