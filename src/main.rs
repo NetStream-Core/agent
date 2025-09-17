@@ -5,10 +5,15 @@ use log::info;
 use std::path::Path;
 use tokio::main;
 
+mod network;
+
 #[main]
 async fn main() -> Result<()> {
     env_logger::init();
     info!("Agent started. Hello from logger!");
+
+    let interface = network::get_default_interface()?;
+    info!("Using network interface: {}", interface);
 
     if !Path::new("bpf/prog.bpf.o").exists() {
         return Err(anyhow!("eBPF file not found: bpf/prog.bpf.o"));
@@ -23,13 +28,11 @@ async fn main() -> Result<()> {
     let xdp_program: &mut Xdp = program.try_into()?;
 
     xdp_program.load()?;
-    xdp_program.attach("wlan0", XdpFlags::default())?;
+    xdp_program.attach(&interface, XdpFlags::default())?;
 
-    info!("eBPF program attached");
+    info!("eBPF program attached to {}", interface);
 
     loop {
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     }
-
-    // Ok(())
 }
