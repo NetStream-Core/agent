@@ -13,6 +13,7 @@ fn find_include(header: &str, search_paths: &[&str]) -> Option<PathBuf> {
 
 fn main() {
     println!("cargo:rerun-if-changed=bpf/prog.bpf.c");
+    println!("cargo:rerun-if-changed=proto/metrics.proto");
 
     let system_paths = [
         "/usr/include",
@@ -41,6 +42,7 @@ fn main() {
         "-O2",
         "-target",
         "bpf",
+        "-g",
         "-c",
         "bpf/prog.bpf.c",
         "-o",
@@ -60,4 +62,9 @@ fn main() {
     if !status.success() {
         panic!("eBPF compilation failed");
     }
+
+    prost_build::Config::new()
+        .out_dir("proto/")
+        .compile_protos(&["proto/metrics.proto"], &["."])
+        .expect("Failed to compile proto files");
 }
