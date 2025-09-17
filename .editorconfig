@@ -11,3 +11,5 @@ indent_size = 2
 [*.rs]
 indent_size = 4
 
+[justfile]
+indent_size = 4
