@@ -5,3 +5,6 @@ clean:
 
 run:
     sudo RUST_LOG=info ./target/debug/network-monitor-agent
+
+update:
+    git submodule update --init --remote
