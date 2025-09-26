@@ -10,18 +10,3 @@ pre-commit:
     formatting:
       run: cargo fmt
       stage_fixed: true
-
-pre-push:
-  commands:
-    changelog:
-      run: |
-        echo "Добавление CHANGELOG.md..."
-        git add CHANGELOG.md
-        if git diff --cached --quiet; then
-          echo "Нет изменений для коммита."
-        else
-          echo "Создание коммита..."
-          git commit -m "chore(release): обновлен changelog"
-        fi
-        echo "Отправка изменений..."
-        git push --no-verify
