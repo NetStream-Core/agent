@@ -5,28 +5,9 @@
 #include <linux/tcp.h>
 #include <linux/udp.h>
 
-#define BPF_NTOHS(x) (__builtin_bswap16(x))
-
-struct packet_key {
-    __u32 protocol;
-    __u32 src_ip;
-    __u32 dst_ip;
-    __u16 src_port;
-    __u16 dst_port;
-};
-
-struct packet_value {
-    __u64 count;
-    __u64 timestamp;
-    __u32 payload_size;
-};
-
-struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
-    __type(key, struct packet_key);
-    __type(value, struct packet_value);
-    __uint(max_entries, 1024);
-} packet_counts SEC(".maps");
+#include "include/common.h"
+#include "include/structs.h"
+#include "include/dns.h"
 
 SEC("xdp")
 int xdp_monitor(struct xdp_md *ctx) {
@@ -70,6 +51,14 @@ int xdp_monitor(struct xdp_md *ctx) {
         key.src_port = BPF_NTOHS(udp->source);
         key.dst_port = BPF_NTOHS(udp->dest);
         payload_size -= sizeof(*udp);
+
+        if (key.dst_port == DNS_PORT) {
+            void *dns_data = data + sizeof(*eth) + sizeof(*ip) + sizeof(*udp);
+            int result = handle_dns(ctx, dns_data, data_end);
+            if (result != XDP_PASS) {
+                return result;
+            }
+        }
     }
 
     struct packet_value *value = bpf_map_lookup_elem(&packet_counts, &key);

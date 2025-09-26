@@ -1,35 +1,15 @@
 use anyhow::{Result, anyhow};
 use aya::Ebpf;
-use aya::maps::HashMap;
 use aya::programs::{Xdp, XdpFlags};
 use log::info;
-use std::net::Ipv4Addr;
 use std::path::Path;
 use tokio::main;
 
+mod maps;
 mod metrics;
 mod network;
-
-#[repr(C)]
-#[derive(Copy, Clone)]
-struct PacketKey {
-    protocol: u32,
-    src_ip: u32,
-    dst_ip: u32,
-    src_port: u16,
-    dst_port: u16,
-}
-
-#[repr(C)]
-#[derive(Copy, Clone)]
-struct PacketValue {
-    count: u64,
-    timestamp: u64,
-    payload_size: u32,
-}
-
-unsafe impl aya::Pod for PacketKey {}
-unsafe impl aya::Pod for PacketValue {}
+mod types;
+mod xxh64;
 
 #[main]
 async fn main() -> Result<()> {
@@ -56,38 +36,16 @@ async fn main() -> Result<()> {
 
     info!("eBPF program attached to {}", interface);
 
+    #[allow(unused_variables)]
+    let malware_domains = maps::load_malware_domains(&mut bpf)?;
+
     let packet_counts_map = bpf
         .map("packet_counts")
         .ok_or_else(|| anyhow!("Map 'packet_counts' not found"))?;
-    let packet_counts: HashMap<_, PacketKey, PacketValue> = HashMap::try_from(packet_counts_map)?;
+    let packet_counts = aya::maps::HashMap::try_from(packet_counts_map)?;
 
     loop {
-        let mut metrics = vec![];
-        for entry in packet_counts.iter().filter_map(|r| r.ok()) {
-            let (key, value) = entry;
-            info!(
-                "Protocol {}: src_ip={:?}, dst_ip={:?}, src_port={}, dst_port={}, count={}, timestamp={}, payload_size={}",
-                key.protocol,
-                Ipv4Addr::from(key.src_ip),
-                Ipv4Addr::from(key.dst_ip),
-                key.src_port,
-                key.dst_port,
-                value.count,
-                value.timestamp,
-                value.payload_size
-            );
-            metrics.push(metrics::proto::PacketMetric {
-                protocol: key.protocol,
-                count: value.count,
-                src_ip: Ipv4Addr::from(key.src_ip).to_string(),
-                dst_ip: Ipv4Addr::from(key.dst_ip).to_string(),
-                src_port: key.src_port as u32,
-                dst_port: key.dst_port as u32,
-                timestamp: value.timestamp,
-                payload_size: value.payload_size,
-            });
-        }
-
+        let metrics = maps::collect_metrics(&packet_counts)?;
         let serialized = metrics::serialize_metrics(metrics)?;
         for buf in serialized {
             info!("Serialized metric (hex): {:x?}", buf);
