@@ -11,7 +11,7 @@ fn find_include(header: &str, search_paths: &[&str]) -> Option<PathBuf> {
     None
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=bpf/prog.bpf.c");
     println!("cargo:rerun-if-changed=proto/metrics.proto");
 
@@ -63,8 +63,11 @@ fn main() {
         panic!("eBPF compilation failed");
     }
 
-    prost_build::Config::new()
-        .out_dir("proto/")
-        .compile_protos(&["proto/metrics.proto"], &["."])
-        .expect("Failed to compile proto files");
+    tonic_prost_build::configure()
+        .build_server(true)
+        .build_client(true)
+        .out_dir("proto")
+        .compile_protos(&["proto/metrics.proto"], &["proto"])?;
+
+    Ok(())
 }

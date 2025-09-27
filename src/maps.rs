@@ -1,39 +1,42 @@
-use anyhow::{Result, anyhow};
-use aya::Ebpf;
-use aya::maps::{HashMap, MapData};
-use log::info;
-use std::fs;
-use std::net::Ipv4Addr;
-
 use crate::metrics::proto::PacketMetric;
 use crate::types::{PacketKey, PacketValue};
 use crate::xxh64::xxh64_hash;
+use anyhow::Result;
+use aya::{
+    Ebpf,
+    maps::{HashMap, MapData},
+};
+use log::info;
+use std::{collections::HashMap as StdHashMap, fs, net::Ipv4Addr, sync::Arc};
+use tokio::sync::Mutex;
 
-pub fn load_malware_domains(
-    bpf: &mut Ebpf,
-) -> Result<aya::maps::HashMap<&mut MapData, u64, u8>, anyhow::Error> {
+pub fn load_malware_domains(bpf: &mut Ebpf) -> Result<StdHashMap<String, u8>> {
     let malware_domains_map = bpf
         .map_mut("malware_domains")
-        .ok_or_else(|| anyhow!("Map 'malware_domains' not found"))?;
+        .ok_or_else(|| anyhow::anyhow!("Map 'malware_domains' not found"))?;
     let mut malware_domains: HashMap<_, u64, u8> = HashMap::try_from(malware_domains_map)?;
+    let mut domains = StdHashMap::new();
 
-    let domains = fs::read_to_string("malware_domains.txt").unwrap_or_default();
-    for domain in domains.lines() {
+    let file_domains = fs::read_to_string("malware_domains.txt").unwrap_or_default();
+    for domain in file_domains.lines() {
         let domain = domain.trim();
         if !domain.is_empty() {
             let domain_hash = xxh64_hash(domain.as_bytes());
             malware_domains.insert(domain_hash, 1, 0)?;
+            domains.insert(domain.to_string(), 1);
             info!("Added malware domain: {} (hash: {})", domain, domain_hash);
         }
     }
 
-    Ok(malware_domains)
+    Ok(domains)
 }
 
-pub fn collect_metrics(
-    packet_counts: &HashMap<&MapData, PacketKey, PacketValue>,
-) -> Result<Vec<PacketMetric>, anyhow::Error> {
+pub async fn collect_metrics(
+    packet_counts: &Arc<Mutex<HashMap<MapData, PacketKey, PacketValue>>>,
+) -> Result<Vec<PacketMetric>> {
     let mut metrics = vec![];
+    let packet_counts = packet_counts.lock().await;
+
     for entry in packet_counts.iter().filter_map(|r| r.ok()) {
         let (key, value) = entry;
         metrics.push(PacketMetric {
@@ -48,4 +51,17 @@ pub fn collect_metrics(
         });
     }
     Ok(metrics)
+}
+
+pub fn update_malware_domain(
+    malware_domains: &mut StdHashMap<String, u8>,
+    domain: &str,
+) -> Result<()> {
+    let domain_hash = xxh64_hash(domain.as_bytes());
+    malware_domains.insert(domain.to_string(), 1);
+    info!(
+        "Dynamically added malware domain: {} (hash: {})",
+        domain, domain_hash
+    );
+    Ok(())
 }

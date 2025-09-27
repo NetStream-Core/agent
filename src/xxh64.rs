@@ -1,4 +1,4 @@
-const MAX_QUERY_LENGTH: usize = 255;
+pub const MAX_QUERY_LENGTH: usize = 255;
 
 pub fn xxh64_hash(data: &[u8]) -> u64 {
     let mut hash = 0x9e3779b97f4a7c15u64;
