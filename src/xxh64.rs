@@ -3,7 +3,8 @@ pub const MAX_QUERY_LENGTH: usize = 255;
 pub fn xxh64_hash(data: &[u8]) -> u64 {
     let mut hash = 0x9e3779b97f4a7c15u64;
     let prime = 0x100000001b3u64;
-    for &byte in data.iter().take(MAX_QUERY_LENGTH) {
+    let len = data.len().min(MAX_QUERY_LENGTH);
+    for &byte in data.iter().take(len) {
         if byte == 0 {
             break;
         }
