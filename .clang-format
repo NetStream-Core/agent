@@ -1,0 +1,41 @@
+# .clang-format
+Language: C
+BasedOnStyle: LLVM
+IndentWidth: 4
+UseTab: Never
+TabWidth: 4
+ColumnLimit: 120
+PointerAlignment: Right
+AlignConsecutiveAssignments: true
+AlignConsecutiveDeclarations: true
+AlignOperands: true
+AlignTrailingComments: true
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterEnum: true
+  AfterStruct: true
+  AfterUnion: true
+  AfterFunction: true
+  AfterExternBlock: true
+  BeforeElse: false
+  BeforeWhile: false
+  SplitEmptyFunction: false
+IndentCaseLabels: true
+AllowShortBlocksOnASingleLine: true
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: true
+AllowShortLoopsOnASingleLine: true
+SpaceBeforeParens: ControlStatements
+SpaceAfterCStyleCast: false
+ReflowComments: true
+InsertNewlineAtEOF: true
+MaxEmptyLinesToKeep: 1
+ForEachMacros:
+  - LIST_FOREACH
+  - SLIST_FOREACH
+  - TAILQ_FOREACH
+IncludeCategories:
+  - Regex: '^<.*\.h>'
+    Priority: 1
+  - Regex: '^".*\.h"'
+    Priority: 2

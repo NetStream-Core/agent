@@ -1,0 +1,19 @@
+---
+Checks: >
+  bugprone-*,
+  clang-analyzer-*,
+  misc-definitions-in-headers,
+  misc-static-assert,
+  performance-*,
+  portability-*,
+  readability-non-const-parameter,
+  -bugprone-exception-escape,
+  -bugprone-easily-swappable-parameters,
+  -readability-magic-numbers,
+  -cert-err34-c
+
+WarningsAsErrors: ''
+FormatStyle: file
+HeaderFilterRegex: '.*\.h$'
+CStandard: c17
+SystemHeaders: false
