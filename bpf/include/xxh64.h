@@ -24,5 +24,4 @@ static __always_inline __u64 xxh64_hash(const char *data, __u32 len) {
     return hash;
 }
 
-
 #endif /* __XXH64_H__ */

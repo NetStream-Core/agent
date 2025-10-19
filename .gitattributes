@@ -2,5 +2,3 @@
 
 .gitattributes export-ignore
 .gitignore     export-ignore
-
-*.proto        linguist-detectable=true
