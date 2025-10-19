@@ -8,3 +8,9 @@ run:
 
 update:
     git submodule update --init --remote
+
+format:
+    find . -name "*.c" -o -name "*.h" -type f | xargs clang-format -i -style=file
+
+tidy:
+    find . -name "*.c" -type f | xargs -I {} clang-tidy -config-file=.clang-tidy {} -- -I.
