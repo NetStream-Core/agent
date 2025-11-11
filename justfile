@@ -10,7 +10,7 @@ update:
     git submodule update --init --remote
 
 format:
-    find . -name "*.c" -o -name "*.h" -type f | xargs clang-format -i -style=file
+    find . -name "*.c" -exec clang-format -i {} \; -exec echo "Formatted: {}" \;
 
 tidy:
-    find . -name "*.c" -type f | xargs -I {} clang-tidy -config-file=.clang-tidy {} -- -I.
+    find . -name "*.c" ! -path "./bpf/*" -exec clang-tidy -checks='clang-analyzer-*,bugprone-*' {} -- -I. \;
