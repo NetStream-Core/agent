@@ -8,5 +8,5 @@ pre-commit:
       run: cargo build
 
     formatting:
-      run: cargo fmt
+      run: just format
       stage_fixed: true

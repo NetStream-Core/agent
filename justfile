@@ -10,6 +10,7 @@ update:
     git submodule update --init --remote
 
 format:
+    cargo fmt
     find . -name "*.c" -exec clang-format -i {} \; -exec echo "Formatted: {}" \;
 
 tidy:

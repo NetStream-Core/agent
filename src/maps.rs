@@ -38,9 +38,7 @@ pub async fn collect_metrics(
     let mut metrics = vec![];
     let packet_counts = packet_counts.lock().await;
 
-    let current_timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)?
-        .as_secs();
+    let current_timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
 
     for entry in packet_counts.iter().filter_map(|r| r.ok()) {
         let (key, value) = entry;
