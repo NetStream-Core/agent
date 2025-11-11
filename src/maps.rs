@@ -7,6 +7,7 @@ use aya::{
     maps::{HashMap, MapData},
 };
 use log::info;
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::{collections::HashMap as StdHashMap, fs, net::Ipv4Addr, sync::Arc};
 use tokio::sync::Mutex;
 
@@ -37,6 +38,10 @@ pub async fn collect_metrics(
     let mut metrics = vec![];
     let packet_counts = packet_counts.lock().await;
 
+    let current_timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)?
+        .as_secs();
+
     for entry in packet_counts.iter().filter_map(|r| r.ok()) {
         let (key, value) = entry;
         metrics.push(PacketMetric {
@@ -46,7 +51,7 @@ pub async fn collect_metrics(
             dst_ip: Ipv4Addr::from(key.dst_ip).to_string(),
             src_port: key.src_port as u32,
             dst_port: key.dst_port as u32,
-            timestamp: value.timestamp,
+            timestamp: current_timestamp,
             payload_size: value.payload_size,
         });
     }

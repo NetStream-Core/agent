@@ -12,7 +12,7 @@ Checks: >
   -readability-magic-numbers,
   -cert-err34-c
 
-WarningsAsErrors: ''
+WarningsAsErrors: ""
 FormatStyle: file
 HeaderFilterRegex: '.*\.h$'
 CStandard: c17
