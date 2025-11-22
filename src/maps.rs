@@ -36,7 +36,8 @@ pub async fn collect_metrics(
     packet_counts: &Arc<Mutex<HashMap<MapData, PacketKey, PacketValue>>>,
 ) -> Result<Vec<PacketMetric>> {
     let mut metrics = vec![];
-    let packet_counts = packet_counts.lock().await;
+    let mut keys_to_delete = vec![];
+    let mut packet_counts = packet_counts.lock().await;
 
     let current_timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
 
@@ -52,19 +53,12 @@ pub async fn collect_metrics(
             timestamp: current_timestamp,
             payload_size: value.payload_size,
         });
+        keys_to_delete.push(key);
     }
-    Ok(metrics)
-}
 
-pub fn update_malware_domain(
-    malware_domains: &mut StdHashMap<String, u8>,
-    domain: &str,
-) -> Result<()> {
-    let domain_hash = xxh64_hash(domain.as_bytes());
-    malware_domains.insert(domain.to_string(), 1);
-    info!(
-        "Dynamically added malware domain: {} (hash: {})",
-        domain, domain_hash
-    );
-    Ok(())
+    for key in keys_to_delete {
+        let _ = packet_counts.remove(&key);
+    }
+
+    Ok(metrics)
 }
