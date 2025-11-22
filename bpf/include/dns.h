@@ -7,19 +7,17 @@
 #include "structs.h"
 #include "xxh64.h"
 
-static __always_inline int handle_dns(struct xdp_md *ctx, void *data, void *data_end)
+static __always_inline int handle_dns(struct xdp_md *ctx, void *data, void *data_end, __u32 src_ip)
 {
     void *dns_data = data;
     if (dns_data + DNS_HEADER_SIZE > data_end) { return XDP_PASS; }
 
     __u32 query_length = data_end - dns_data - DNS_HEADER_SIZE;
     if (query_length > MAX_QUERY_LENGTH) {
-        bpf_printk("DNS query too long: %u", query_length);
         return XDP_DROP;
     }
 
     if (query_length > SUSPICIOUS_QUERY_LENGTH) {
-        bpf_printk("Suspicious DNS query length: %u", query_length);
         return XDP_DROP;
     }
 
@@ -34,14 +32,20 @@ static __always_inline int handle_dns(struct xdp_md *ctx, void *data, void *data
     }
 
     if (qname_len == 0) {
-        bpf_printk("Invalid QNAME");
         return XDP_PASS;
     }
 
     __u64 domain_hash = xxh64_hash(query_name, qname_len);
     __u8 *is_malware  = bpf_map_lookup_elem(&malware_domains, &domain_hash);
+
     if (is_malware && *is_malware == 1) {
-        bpf_printk("Malware DNS domain detected: hash=%llu", domain_hash);
+        struct malware_event_t *e;
+        e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+        if (e) {
+            e->src_ip = src_ip;
+            e->domain_hash = domain_hash;
+            bpf_ringbuf_submit(e, 0);
+        }
         return XDP_DROP;
     }
 

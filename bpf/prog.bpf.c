@@ -57,7 +57,7 @@ int xdp_monitor(struct xdp_md *ctx)
 
         if (key.dst_port == DNS_PORT) {
             void *dns_data = data + sizeof(*eth) + ip_header_len + sizeof(*udp);
-            int   result   = handle_dns(ctx, dns_data, data_end);
+            int   result   = handle_dns(ctx, dns_data, data_end, key.src_ip);
             if (result != XDP_PASS) { return result; }
         }
     }
