@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
 use aya::{
     Ebpf,
-    maps::HashMap,
+    maps::{HashMap, RingBuf},
     programs::{Xdp, XdpFlags},
 };
 use log::info;
@@ -13,7 +13,7 @@ use crate::{maps, network, types};
 pub async fn setup() -> Result<(
     Arc<Mutex<Ebpf>>,
     Arc<Mutex<HashMap<aya::maps::MapData, types::PacketKey, types::PacketValue>>>,
-    Arc<Mutex<std::collections::HashMap<String, u8>>>,
+    RingBuf<aya::maps::MapData>,
 )> {
     let interface = network::get_default_interface()?;
     info!("Using network interface: {}", interface);
@@ -37,10 +37,16 @@ pub async fn setup() -> Result<(
     info!("eBPF program attached to {}", interface);
 
     let mut bpf_guard = bpf.lock().await;
-    let malware_domains = maps::load_malware_domains(&mut *bpf_guard)?;
-    drop(bpf_guard);
+    let _ = maps::load_malware_domains(&mut *bpf_guard)?;
 
-    let malware_domains = Arc::new(Mutex::new(malware_domains));
+    let ring_buf = {
+        let map = bpf_guard
+            .take_map("events")
+            .ok_or_else(|| anyhow!("Map 'events' not found"))?;
+        RingBuf::try_from(map)?
+    };
+
+    drop(bpf_guard);
 
     let packet_counts = {
         let mut bpf_guard = bpf.lock().await;
@@ -52,5 +58,5 @@ pub async fn setup() -> Result<(
         Arc::new(Mutex::new(hash_map))
     };
 
-    Ok((bpf, packet_counts, malware_domains))
+    Ok((bpf, packet_counts, ring_buf))
 }

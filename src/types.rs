@@ -19,3 +19,12 @@ pub struct PacketValue {
 }
 
 unsafe impl aya::Pod for PacketValue {}
+
+#[repr(C, packed)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct MalwareEvent {
+    pub src_ip: u32,
+    pub domain_hash: u64,
+}
+
+unsafe impl aya::Pod for MalwareEvent {}
