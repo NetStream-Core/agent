@@ -1,4 +1,7 @@
+#include <linux/types.h>
+
 #include <bpf/bpf_helpers.h>
+
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
 #include <linux/ip.h>
@@ -38,7 +41,7 @@ int xdp_monitor(struct xdp_md *ctx)
     if (ip->protocol == 6) {
         struct tcphdr *tcp = data + sizeof(*eth) + ip_header_len;
 
-        if ((void*)tcp + sizeof(*tcp) > data_end) { return XDP_PASS; }
+        if ((void *)tcp + sizeof(*tcp) > data_end) { return XDP_PASS; }
 
         key.src_port = BPF_NTOHS(tcp->source);
         key.dst_port = BPF_NTOHS(tcp->dest);
@@ -46,7 +49,7 @@ int xdp_monitor(struct xdp_md *ctx)
     } else if (ip->protocol == 17) {
         struct udphdr *udp = data + sizeof(*eth) + ip_header_len;
 
-        if ((void*)udp + sizeof(*udp) > data_end) { return XDP_PASS; }
+        if ((void *)udp + sizeof(*udp) > data_end) { return XDP_PASS; }
 
         key.src_port = BPF_NTOHS(udp->source);
         key.dst_port = BPF_NTOHS(udp->dest);
@@ -69,7 +72,7 @@ int xdp_monitor(struct xdp_md *ctx)
         bpf_map_update_elem(&packet_counts, &key, &new_value, BPF_NOEXIST);
     } else {
         __sync_fetch_and_add(&value->count, 1);
-        value->timestamp    = bpf_ktime_get_ns();
+        value->timestamp = bpf_ktime_get_ns();
         __sync_fetch_and_add(&value->payload_size, payload_size);
     }
 

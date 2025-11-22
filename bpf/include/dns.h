@@ -2,6 +2,7 @@
 #define __DNS_H__
 
 #include <bpf/bpf_helpers.h>
+
 #include "common.h"
 #include "structs.h"
 #include "xxh64.h"
