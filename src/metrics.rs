@@ -1,3 +1,3 @@
 pub mod proto {
-    include!("../proto/metrics.rs");
+    include!(concat!(env!("OUT_DIR"), "/metrics.rs"));
 }
