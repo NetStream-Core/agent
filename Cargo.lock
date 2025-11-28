@@ -739,7 +739,6 @@ dependencies = [
  "regex",
  "tokio",
  "tonic",
- "tonic-build",
  "tonic-prost",
  "tonic-prost-build",
  "zstd",

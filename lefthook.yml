@@ -1,11 +1,14 @@
 pre-commit:
   commands:
     linting:
-      run: cargo clippy
+      run: just tidy
       stage_fixed: true
 
     building:
-      run: cargo build
+      run: just build --release
+
+    testing:
+      run: just test
 
     formatting:
       run: just format
