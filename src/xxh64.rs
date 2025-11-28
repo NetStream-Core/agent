@@ -10,7 +10,7 @@ pub fn xxh64_hash(data: &[u8]) -> u64 {
         }
         hash ^= byte as u64;
         hash = hash.wrapping_mul(prime);
-        hash = (hash << 23) | (hash >> 41);
+        hash = (hash.rotate_left(23)) | (hash.rotate_right(41));
     }
     hash ^= hash >> 33;
     hash = hash.wrapping_mul(0xc2b2ae35u64);
