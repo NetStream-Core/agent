@@ -37,7 +37,7 @@ pub async fn setup() -> Result<(
     info!("eBPF program attached to {}", interface);
 
     let mut bpf_guard = bpf.lock().await;
-    let _ = maps::load_malware_domains(&mut *bpf_guard)?;
+    let _ = maps::load_malware_domains(&mut bpf_guard)?;
 
     let ring_buf = {
         let map = bpf_guard

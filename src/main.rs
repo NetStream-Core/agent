@@ -15,6 +15,5 @@ async fn main() -> Result<()> {
     env_logger::init();
     info!("Starting network monitor agent...");
 
-    let telemetry_result = telemetry::run().await;
-    telemetry_result
+    telemetry::run().await
 }
