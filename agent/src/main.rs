@@ -1,5 +1,5 @@
 mod bpf;
-// mod config;
+mod config;
 mod telemetry;
 mod utils;
 
