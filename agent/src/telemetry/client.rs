@@ -2,18 +2,12 @@ use anyhow::{Result, anyhow};
 use log::{info, warn};
 use tokio::time::sleep;
 
-use crate::bpf::loader;
-use crate::bpf::{events, maps};
-
-use crate::config::paths::malware_domains;
-use crate::config::runtime::{METRICS_SERVER_ADDR, REPORT_INTERVAL};
-
-use super::models::proto::{
-    CompressedMetricsBatch, MetricsBatch, metrics_service_client::MetricsServiceClient,
-};
+use crate::bpf::{collect_metrics, load_hashes, setup, spawn_event_monitor};
+use crate::config::{METRICS_SERVER_ADDR, REPORT_INTERVAL, malware_domains};
+use crate::telemetry::{CompressedMetricsBatch, MetricsBatch, MetricsServiceClient};
 
 pub async fn run() -> Result<()> {
-    let (_bpf, packet_counts, ring_buf) = loader::setup().await?;
+    let (_bpf, packet_counts, ring_buf) = setup().await?;
 
     let path = malware_domains();
     if !path.exists() {
@@ -23,9 +17,9 @@ pub async fn run() -> Result<()> {
         ));
     }
 
-    let domain_hashes = events::load_hashes(&path)?;
+    let domain_hashes = load_hashes(&path)?;
 
-    events::spawn_event_monitor(ring_buf, domain_hashes);
+    spawn_event_monitor(ring_buf, domain_hashes);
 
     let mut client = MetricsServiceClient::connect(METRICS_SERVER_ADDR)
         .await
@@ -34,7 +28,7 @@ pub async fn run() -> Result<()> {
     info!("Connected to gRPC server at {METRICS_SERVER_ADDR}");
 
     loop {
-        let metrics = maps::collect_metrics(&packet_counts).await?;
+        let metrics = collect_metrics(&packet_counts).await?;
 
         if !metrics.is_empty() {
             let batch = MetricsBatch { metrics };

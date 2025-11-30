@@ -8,9 +8,9 @@ use log::info;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::bpf::maps;
-use crate::config::paths::bpf_object;
-use crate::utils::net;
+use crate::bpf::load_malware_domains;
+use crate::config::bpf_object;
+use crate::utils::get_default_interface;
 use common::{PacketKey, PacketValue};
 
 pub async fn setup() -> Result<(
@@ -18,7 +18,7 @@ pub async fn setup() -> Result<(
     Arc<Mutex<HashMap<aya::maps::MapData, PacketKey, PacketValue>>>,
     RingBuf<aya::maps::MapData>,
 )> {
-    let interface = net::get_default_interface()?;
+    let interface = get_default_interface()?;
     info!("Using network interface: {}", interface);
 
     let path = bpf_object();
@@ -37,7 +37,7 @@ pub async fn setup() -> Result<(
 
     info!("eBPF program attached to {}", interface);
 
-    maps::load_malware_domains(&mut bpf)?;
+    load_malware_domains(&mut bpf)?;
 
     let ring_buf = {
         let map = bpf

@@ -12,9 +12,9 @@ use std::{
 };
 use tokio::sync::Mutex;
 
-use crate::config::paths::malware_domains;
-use crate::telemetry::models::proto::PacketMetric;
-use crate::utils::hash::xxh64_hash;
+use crate::config::malware_domains;
+use crate::telemetry::PacketMetric;
+use crate::utils::xxh64_hash;
 
 pub fn load_malware_domains(bpf: &mut Ebpf) -> Result<usize> {
     let map = bpf
