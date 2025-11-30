@@ -1,11 +1,11 @@
-use crate::metrics::proto::PacketMetric;
-use crate::types::{PacketKey, PacketValue};
-use crate::xxh64::xxh64_hash;
+use crate::telemetry::models::proto::PacketMetric;
+use crate::utils::hash::xxh64_hash;
 use anyhow::Result;
 use aya::{
     Ebpf,
     maps::{HashMap, MapData},
 };
+use common::{PacketKey, PacketValue};
 use log::info;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{collections::HashMap as StdHashMap, fs, net::Ipv4Addr, sync::Arc};
@@ -18,14 +18,18 @@ pub fn load_malware_domains(bpf: &mut Ebpf) -> Result<StdHashMap<String, u8>> {
     let mut malware_domains: HashMap<_, u64, u8> = HashMap::try_from(malware_domains_map)?;
     let mut domains = StdHashMap::new();
 
-    let file_domains = fs::read_to_string("malware_domains.txt").unwrap_or_default();
-    for domain in file_domains.lines() {
+    let content = fs::read_to_string("malware_domains.txt").unwrap_or_default();
+
+    for domain in content.lines() {
         let domain = domain.trim();
         if !domain.is_empty() {
             let domain_hash = xxh64_hash(domain.as_bytes());
             malware_domains.insert(domain_hash, 1, 0)?;
             domains.insert(domain.to_string(), 1);
-            info!("Added malware domain: {} (hash: {})", domain, domain_hash);
+            info!(
+                "Added malware domain to BPF Map: {} (hash: {})",
+                domain, domain_hash
+            );
         }
     }
 

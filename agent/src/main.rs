@@ -1,14 +1,10 @@
+mod bpf;
+// mod config;
+mod telemetry;
+mod utils;
+
 use anyhow::Result;
 use log::info;
-
-mod domains;
-mod init;
-mod maps;
-mod metrics;
-mod network;
-mod telemetry;
-mod types;
-mod xxh64;
 
 #[tokio::main]
 async fn main() -> Result<()> {

@@ -1,24 +1,15 @@
-[package]
-name = "network-monitor-agent"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+resolver = "2"
+members = [
+    "agent",
+    "common"
+]
 
-[dependencies]
-anyhow = "1.0.99"
-aya = { version = "0.13.1", features = ["async_tokio"] }
-bytemuck = { version = "1.23.2", features = ["derive"] }
-env_logger = "0.11.8"
-log = "0.4.28"
-pnet = "0.35.0"
-prost = "0.14.1"
-prost-types = "0.14.1"
-regex = "1.11.3"
-tokio = { version = "1.47.1", features = ["full"] }
-tonic = { version = "0.14.2", features = ["transport"] }
-tonic-prost = "0.14.2"
-zstd = "0.13.3"
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
 
-[build-dependencies]
-prost-build = "0.14.1"
-tonic-build = "0.14.2"
-tonic-prost-build = "0.14.2"
+[profile.dev]
+panic = "abort"

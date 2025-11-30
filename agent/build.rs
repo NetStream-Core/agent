@@ -12,7 +12,7 @@ fn find_include(header: &str, search_paths: &[&str]) -> Option<PathBuf> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("cargo:rerun-if-changed=bpf/prog.bpf.c");
+    println!("cargo:rerun-if-changed=../bpf/prog.bpf.c");
     println!("cargo:rerun-if-changed=proto/metrics.proto");
 
     let system_paths = [
@@ -44,9 +44,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "bpf",
         "-g",
         "-c",
-        "bpf/prog.bpf.c",
+        "../bpf/prog.bpf.c",
         "-o",
-        "bpf/prog.bpf.o",
+        "../bpf/prog.bpf.o",
     ];
 
     for path in &include_paths {
@@ -66,7 +66,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     tonic_prost_build::configure()
         .build_server(true)
         .build_client(true)
-        .compile_protos(&["proto/metrics.proto"], &["proto"])?;
+        .compile_protos(&["./proto/metrics.proto"], &["proto"])?;
 
     Ok(())
 }
