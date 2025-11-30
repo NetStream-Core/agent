@@ -4,22 +4,29 @@ use log::{info, warn};
 use std::{collections::HashMap, net::Ipv4Addr, ptr, sync::Arc};
 use tokio::io::{Interest, unix::AsyncFd};
 
-use crate::types::MalwareEvent;
+use crate::utils::hash;
+use common::MalwareEvent;
 
 const SRC_IP_OFFSET: usize = 0;
 const DOMAIN_HASH_OFFSET: usize = 4;
 
 pub fn load_hashes(path: &str) -> Result<Arc<HashMap<String, u64>>> {
     let mut domain_hashes = HashMap::new();
-    let content = std::fs::read_to_string(path).unwrap_or_default();
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(_) => {
+            warn!("Malware domains file not found, starting with empty list");
+            return Ok(Arc::new(domain_hashes));
+        }
+    };
 
     for line in content.lines() {
         let domain = line.trim();
         if domain.is_empty() {
             continue;
         }
-        let hash = crate::xxh64::xxh64_hash(domain.as_bytes());
-        domain_hashes.insert(domain.to_string(), hash);
+        let h = hash::xxh64_hash(domain.as_bytes());
+        domain_hashes.insert(domain.to_string(), h);
     }
 
     Ok(Arc::new(domain_hashes))

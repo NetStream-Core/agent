@@ -1,15 +1,15 @@
-use crate::domains::{load_hashes, spawn_event_monitor};
-use crate::init;
-use crate::metrics::proto::{
+use super::models::proto::{
     CompressedMetricsBatch, MetricsBatch, metrics_service_client::MetricsServiceClient,
 };
+use crate::bpf::loader;
+use crate::bpf::{events, maps};
 use anyhow::Result;
 use log::{info, warn};
 
 pub async fn run() -> Result<()> {
-    let (_bpf, packet_counts, ring_buf) = init::setup().await?;
-    let domain_hashes = load_hashes("malware_domains.txt")?;
-    spawn_event_monitor(ring_buf, domain_hashes);
+    let (_bpf, packet_counts, ring_buf) = loader::setup().await?;
+    let domain_hashes = events::load_hashes("malware_domains.txt")?;
+    events::spawn_event_monitor(ring_buf, domain_hashes);
 
     let mut client = MetricsServiceClient::connect("http://[::1]:50051")
         .await
@@ -17,7 +17,8 @@ pub async fn run() -> Result<()> {
     info!("Connected to gRPC server");
 
     loop {
-        let metrics = crate::maps::collect_metrics(&packet_counts).await?;
+        let metrics = maps::collect_metrics(&packet_counts).await?;
+
         if !metrics.is_empty() {
             let batch = MetricsBatch { metrics };
             let encoded = zstd::encode_all(prost::Message::encode_to_vec(&batch).as_slice(), 3)?;

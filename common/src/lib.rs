@@ -1,5 +1,9 @@
+#![no_std]
+
+use aya::Pod;
+
 #[repr(C, packed)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct PacketKey {
     pub protocol: u32,
     pub src_ip: u32,
@@ -8,17 +12,17 @@ pub struct PacketKey {
     pub dst_port: u16,
 }
 
-unsafe impl aya::Pod for PacketKey {}
+unsafe impl Pod for PacketKey {}
 
 #[repr(C, packed)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct PacketValue {
     pub count: u64,
     pub timestamp: u64,
     pub payload_size: u32,
 }
 
-unsafe impl aya::Pod for PacketValue {}
+unsafe impl Pod for PacketValue {}
 
 #[repr(C, packed)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -27,4 +31,4 @@ pub struct MalwareEvent {
     pub domain_hash: u64,
 }
 
-unsafe impl aya::Pod for MalwareEvent {}
+unsafe impl Pod for MalwareEvent {}
