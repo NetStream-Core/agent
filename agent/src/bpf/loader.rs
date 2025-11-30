@@ -5,10 +5,11 @@ use aya::{
     programs::{Xdp, XdpFlags},
 };
 use log::info;
-use std::{path::Path, sync::Arc};
+use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::bpf::maps;
+use crate::config::paths::bpf_object;
 use crate::utils::net;
 use common::{PacketKey, PacketValue};
 
@@ -20,20 +21,20 @@ pub async fn setup() -> Result<(
     let interface = net::get_default_interface()?;
     info!("Using network interface: {}", interface);
 
-    if !Path::new("./bpf/prog.bpf.o").exists() {
-        return Err(anyhow!("eBPF file not found: ./bpf/prog.bpf.o"));
+    let path = bpf_object();
+    if !path.exists() {
+        return Err(anyhow!("eBPF file not found: {}", path.display()));
     }
 
-    let mut bpf = Ebpf::load_file("./bpf/prog.bpf.o")?;
+    let mut bpf = Ebpf::load_file(&path)?;
 
-    {
-        let program = bpf
-            .program_mut("xdp_monitor")
-            .ok_or_else(|| anyhow!("Program 'xdp_monitor' not found"))?;
-        let xdp_program: &mut Xdp = program.try_into()?;
-        xdp_program.load()?;
-        xdp_program.attach(&interface, XdpFlags::default())?;
-    }
+    let program = bpf
+        .program_mut("xdp_monitor")
+        .ok_or_else(|| anyhow!("Program 'xdp_monitor' not found"))?;
+    let xdp_program: &mut Xdp = program.try_into()?;
+    xdp_program.load()?;
+    xdp_program.attach(&interface, XdpFlags::default())?;
+
     info!("eBPF program attached to {}", interface);
 
     maps::load_malware_domains(&mut bpf)?;
