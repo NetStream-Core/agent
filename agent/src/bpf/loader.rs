@@ -9,7 +9,6 @@ use log::info;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::bpf::load_malware_domains;
 use crate::config::bpf_object;
 use crate::utils::get_default_interface;
 use common::{PacketKey, PacketValue};
@@ -36,12 +35,9 @@ pub async fn setup() -> Result<(
     let xdp: &mut Xdp = program.try_into()?;
 
     xdp.load()?;
-
     let link_id: XdpLinkId = xdp.attach(&interface, XdpFlags::default())?;
 
     info!("eBPF program attached to {}", interface);
-
-    load_malware_domains(&mut bpf)?;
 
     let ring_buf = {
         let map = bpf

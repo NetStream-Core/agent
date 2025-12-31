@@ -3,27 +3,37 @@ use futures_util::StreamExt;
 use log::{info, warn};
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook_tokio::Signals;
+use std::sync::Arc;
 use tokio::time::sleep;
 
-use crate::bpf::{collect_metrics, load_hashes, setup, spawn_event_monitor};
+use crate::bpf::{collect_metrics, setup, spawn_event_monitor};
 use crate::config::{METRICS_SERVER_ADDR, REPORT_INTERVAL, malware_domains};
 use crate::telemetry::{CompressedMetricsBatch, MetricsBatch, MetricsServiceClient};
 
 pub async fn run() -> Result<()> {
     let mut signals = Signals::new([SIGINT, SIGTERM])?.fuse();
 
-    let (bpf_shared, packet_counts, ring_buf, xdp_link_id) = setup().await?;
-
+    let mut domain_mgr_raw = crate::domain_manager::DomainManager::new();
     let path = malware_domains();
+
     if !path.exists() {
         return Err(anyhow!(
-            "malware domains file not found: {}",
+            "Malware domains file not found: {}",
             path.display()
         ));
     }
 
-    let domain_hashes = load_hashes(&path)?;
-    spawn_event_monitor(ring_buf, domain_hashes);
+    let hashes = domain_mgr_raw.load_from_file(&path)?;
+    let domain_mgr = Arc::new(domain_mgr_raw);
+
+    let (bpf_shared, packet_counts, ring_buf, xdp_link_id) = setup().await?;
+
+    {
+        let mut bpf = bpf_shared.lock().await;
+        crate::bpf::maps::fill_malware_map(&mut bpf, &hashes)?;
+    }
+
+    spawn_event_monitor(ring_buf, Arc::clone(&domain_mgr));
 
     let mut client = MetricsServiceClient::connect(METRICS_SERVER_ADDR)
         .await
@@ -80,8 +90,6 @@ pub async fn run() -> Result<()> {
             } else {
                 info!("Detached XDP program");
             }
-        } else {
-            warn!("Program 'xdp_monitor' not found during shutdown");
         }
     }
 

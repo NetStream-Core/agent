@@ -1,5 +1,6 @@
 mod bpf;
 mod config;
+mod domain_manager;
 mod telemetry;
 mod utils;
 

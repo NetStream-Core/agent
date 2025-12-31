@@ -12,49 +12,20 @@ use std::{
 };
 use tokio::sync::Mutex;
 
-use crate::config::malware_domains;
 use crate::telemetry::PacketMetric;
-use crate::utils::xxh64_hash;
 
-pub fn load_malware_domains(bpf: &mut Ebpf) -> Result<usize> {
+pub fn fill_malware_map(bpf: &mut Ebpf, hashes: &[u64]) -> Result<()> {
     let map = bpf
         .map_mut("malware_domains")
         .ok_or_else(|| anyhow!("Map 'malware_domains' not found in eBPF object"))?;
-
     let mut malware_map: HashMap<_, u64, u8> = HashMap::try_from(map)?;
 
-    let path = malware_domains();
-    let content = match std::fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            info!(
-                "malware_domains.txt not found at {}, starting with empty map",
-                path.display()
-            );
-            return Ok(0);
-        }
-        Err(e) => return Err(anyhow!("Failed to read {}: {e}", path.display())),
-    };
-
-    let mut loaded = 0;
-    for line in content.lines() {
-        let domain = line.trim();
-        if domain.is_empty() || domain.starts_with('#') {
-            continue;
-        }
-
-        let hash = xxh64_hash(domain.as_bytes());
-
-        if malware_map.insert(hash, 1, 0).is_ok() {
-            info!("Loaded malware domain: {} (hash: 0x{:x})", domain, hash);
-            loaded += 1;
-        } else {
-            info!("Skipped domain (insert failed): {}", domain);
-        }
+    for &hash in hashes {
+        let _ = malware_map.insert(hash, 1, 0);
     }
 
-    info!("Successfully loaded {loaded} malicious domains into BPF map");
-    Ok(loaded)
+    info!("BPF: в карту загружено {} хэшей", hashes.len());
+    Ok(())
 }
 
 pub async fn collect_metrics(
