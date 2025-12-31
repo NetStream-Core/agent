@@ -1,70 +1,56 @@
 name: Snyk Security Scan
-
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
-
 permissions:
   contents: read
   security-events: write
-
 jobs:
   snyk:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-
       - name: Install Snyk CLI
         run: npm install -g snyk
-
       - name: Authenticate Snyk
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: snyk auth ${SNYK_TOKEN}
-
       - name: Run Snyk scan (Rust workspace)
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: |
           set +e
-
           cd agent
           snyk test \
             --severity-threshold=high \
             --sarif-file-output=../snyk-agent.sarif \
             >/dev/null 2>&1
           cd ..
-
           cd common
           snyk test \
             --severity-threshold=high \
             --sarif-file-output=../snyk-common.sarif \
             >/dev/null 2>&1
           cd ..
-
           EMPTY_SARIF='{"$schema":"https://json.schemastore.org/sarif-2.1.0","version":"2.1.0","runs":[]}'
-
           for file in snyk-agent.sarif snyk-common.sarif; do
             if ! jq -e . "$file" >/dev/null 2>&1; then
               echo "$EMPTY_SARIF" > "$file"
             fi
           done
-
           jq -s '
             {
               "$schema": "https://json.schemastore.org/sarif-2.1.0",
               "version": "2.1.0",
-              "runs": (.[].runs)
+              "runs": [ .[].runs[] ]
             }
           ' snyk-agent.sarif snyk-common.sarif > snyk.sarif
-
       - name: Upload SARIF to GitHub Code Scanning
         uses: github/codeql-action/upload-sarif@v4
         with:
