@@ -29,21 +29,23 @@ jobs:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: snyk auth ${SNYK_TOKEN}
 
-      - name: Run Snyk scan for Rust workspace
+      - name: Run Snyk scan (Rust workspace)
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: |
-          set -e
+          set +e
 
-          snyk test agent \
-            --file=agent/Cargo.toml \
+          cd agent
+          snyk test \
             --severity-threshold=high \
-            --sarif-file-output=snyk-agent.sarif || echo "Snyk agent scan failed"
+            --sarif-file-output=../snyk-agent.sarif
+          cd ..
 
-          snyk test common \
-            --file=common/Cargo.toml \
+          cd common
+          snyk test \
             --severity-threshold=high \
-            --sarif-file-output=snyk-common.sarif || echo "Snyk common scan failed"
+            --sarif-file-output=../snyk-common.sarif
+          cd ..
 
           if [ ! -f snyk-agent.sarif ]; then
             echo '{"$schema":"https://json.schemastore.org/sarif-2.1.0","version":"2.1.0","runs":[]}' > snyk-agent.sarif
