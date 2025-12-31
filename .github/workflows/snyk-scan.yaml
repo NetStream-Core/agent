@@ -23,7 +23,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Run Snyk to check for vulnerabilities
-        uses: snyk/actions/rust@master
+        uses: snyk/actions@master
         continue-on-error: true
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
