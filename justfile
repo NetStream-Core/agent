@@ -24,6 +24,8 @@ format: # Форматировать код
     find . -name "*.c" -exec clang-format -i {} \; -exec echo "Formatted: {}" \;
 
 tidy: # Проверить код линтерами
+    cargo audit
+    cargo deny check
     cargo clippy -- -D warnings
     find . -name "*.c" ! -path "./bpf/*" -exec clang-tidy -checks='clang-analyzer-*,bugprone-*' {} -- -I. \;
 

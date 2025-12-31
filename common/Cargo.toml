@@ -2,7 +2,8 @@
 name = "common"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 
 [dependencies]
 aya = { version = "0.13.1", default-features = false }
-bytemuck = { version = "1.21.0", features = ["derive"] }
+bytemuck = { version = "1.24.0", features = ["derive"] }
