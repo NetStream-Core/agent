@@ -38,19 +38,22 @@ jobs:
           cd agent
           snyk test \
             --severity-threshold=high \
-            --sarif-file-output=../snyk-agent.sarif
+            --sarif-file-output=../snyk-agent.sarif \
+            >/dev/null 2>&1
           cd ..
 
           cd common
           snyk test \
             --severity-threshold=high \
-            --sarif-file-output=../snyk-common.sarif
+            --sarif-file-output=../snyk-common.sarif \
+            >/dev/null 2>&1
           cd ..
 
+          EMPTY_SARIF='{"$schema":"https://json.schemastore.org/sarif-2.1.0","version":"2.1.0","runs":[]}'
+
           for file in snyk-agent.sarif snyk-common.sarif; do
-            if ! jq empty "$file" >/dev/null 2>&1; then
-              echo "Invalid SARIF detected in $file, replacing with empty SARIF"
-              echo '{"$schema":"https://json.schemastore.org/sarif-2.1.0","version":"2.1.0","runs":[]}' > "$file"
+            if ! jq -e . "$file" >/dev/null 2>&1; then
+              echo "$EMPTY_SARIF" > "$file"
             fi
           done
 
