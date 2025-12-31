@@ -31,6 +31,7 @@ jobs:
           command: test
           args: >
             --all-projects
+            --detection-depth=3
             --severity-threshold=high
             --sarif-file-output=snyk.sarif
 
