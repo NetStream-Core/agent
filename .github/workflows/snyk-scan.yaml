@@ -47,13 +47,12 @@ jobs:
             --sarif-file-output=../snyk-common.sarif
           cd ..
 
-          if [ ! -f snyk-agent.sarif ]; then
-            echo '{"$schema":"https://json.schemastore.org/sarif-2.1.0","version":"2.1.0","runs":[]}' > snyk-agent.sarif
-          fi
-
-          if [ ! -f snyk-common.sarif ]; then
-            echo '{"$schema":"https://json.schemastore.org/sarif-2.1.0","version":"2.1.0","runs":[]}' > snyk-common.sarif
-          fi
+          for file in snyk-agent.sarif snyk-common.sarif; do
+            if ! jq empty "$file" >/dev/null 2>&1; then
+              echo "Invalid SARIF detected in $file, replacing with empty SARIF"
+              echo '{"$schema":"https://json.schemastore.org/sarif-2.1.0","version":"2.1.0","runs":[]}' > "$file"
+            fi
+          done
 
           jq -s '
             {
