@@ -6,4 +6,4 @@ license = "MIT"
 
 [dependencies]
 aya = { version = "0.13.1", default-features = false }
-bytemuck = { version = "1.24.0", features = ["derive"] }
+bytemuck = { version = "1.25.0", features = ["derive"] }
