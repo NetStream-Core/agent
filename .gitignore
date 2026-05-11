@@ -1,5 +1,6 @@
 .vscode/
 
 target/
+proto/
+
 **/*.o
-proto/metrics.rs
