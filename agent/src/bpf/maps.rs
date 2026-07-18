@@ -1,65 +1,58 @@
-use anyhow::{Result, anyhow};
-use aya::{
-    Ebpf,
-    maps::{HashMap, MapData},
-};
+use anyhow::Result;
+use aya::maps::{HashMap, MapData};
 use common::{PacketKey, PacketValue};
-use log::info;
-use std::{
-    net::Ipv4Addr,
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use log;
+use opentelemetry::{KeyValue, global};
+use std::{net::Ipv4Addr, sync::Arc};
 use tokio::sync::Mutex;
 
-use crate::telemetry::PacketMetric;
-
-pub fn fill_malware_map(bpf: &mut Ebpf, hashes: &[u64]) -> Result<()> {
-    let map = bpf
-        .map_mut("malware_domains")
-        .ok_or_else(|| anyhow!("Map 'malware_domains' not found in eBPF object"))?;
-    let mut malware_map: HashMap<_, u64, u8> = HashMap::try_from(map)?;
-
-    for &hash in hashes {
-        let _ = malware_map.insert(hash, 1, 0);
-    }
-
-    info!("BPF: в карту загружено {} хэшей", hashes.len());
-    Ok(())
-}
-
-pub async fn collect_metrics(
+pub async fn collect_and_report_metrics(
     packet_counts: &Arc<Mutex<HashMap<MapData, PacketKey, PacketValue>>>,
-) -> Result<Vec<PacketMetric>> {
-    let mut metrics = Vec::new();
+) -> Result<usize> {
     let mut keys_to_remove = Vec::new();
+    let mut processed_count = 0;
 
-    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    let meter = global::meter("netstream_agent");
 
-    {
-        let mut map = packet_counts.lock().await;
+    let packet_counter = meter
+        .u64_counter("netstream_packets_total")
+        .with_description("Total volume of processed network packets")
+        .build();
 
-        for entry in map.iter().flatten() {
-            let (key, value) = entry;
+    let payload_counter = meter
+        .u64_counter("netstream_payload_bytes_total")
+        .with_description("Total volume of payload bytes passing through")
+        .build();
 
-            metrics.push(PacketMetric {
-                protocol: key.protocol,
-                count: value.count,
-                src_ip: Ipv4Addr::from(key.src_ip).to_string(),
-                dst_ip: Ipv4Addr::from(key.dst_ip).to_string(),
-                src_port: key.src_port as u32,
-                dst_port: key.dst_port as u32,
-                timestamp,
-                payload_size: value.payload_size,
-            });
+    let mut map = packet_counts.lock().await;
 
-            keys_to_remove.push(key);
-        }
+    let entries: Vec<_> = map.iter().flatten().collect();
 
-        for key in keys_to_remove {
-            let _ = map.remove(&key);
-        }
+    for entry in entries {
+        let (key, value) = entry;
+        processed_count += 1;
+
+        let attributes = [
+            KeyValue::new("protocol", key.protocol.to_string()),
+            KeyValue::new("src_ip", Ipv4Addr::from(key.src_ip).to_string()),
+            KeyValue::new("dst_ip", Ipv4Addr::from(key.dst_ip).to_string()),
+            KeyValue::new("src_port", (key.src_port as i64).to_string()),
+            KeyValue::new("dst_port", (key.dst_port as i64).to_string()),
+        ];
+
+        packet_counter.add(value.count, &attributes);
+        payload_counter.add(value.payload_size as u64, &attributes);
+
+        keys_to_remove.push(key);
     }
 
-    Ok(metrics)
+    for key in &keys_to_remove {
+        let _ = map.remove(key);
+    }
+
+    if processed_count > 0 {
+        log::debug!("Processed {} packets total", processed_count);
+    }
+
+    Ok(processed_count)
 }
