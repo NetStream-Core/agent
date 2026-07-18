@@ -4,11 +4,44 @@ use log::{info, warn};
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook_tokio::Signals;
 use std::sync::Arc;
-use tokio::time::sleep;
+use std::time::Duration;
+use tokio::time::interval;
 
-use crate::bpf::{collect_metrics, setup, spawn_event_monitor};
+use opentelemetry::global;
+use opentelemetry_sdk::Resource;
+use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
+
+use opentelemetry_otlp::{MetricExporter, WithExportConfig};
+
+use crate::bpf::{collect_and_report_metrics, setup, spawn_event_monitor};
 use crate::config::{METRICS_SERVER_ADDR, REPORT_INTERVAL, malware_domains};
-use crate::telemetry::{CompressedMetricsBatch, MetricsBatch, MetricsServiceClient};
+
+fn init_otlp_metrics() -> Result<SdkMeterProvider> {
+    let resource = Resource::builder()
+        .with_attributes(vec![opentelemetry::KeyValue::new(
+            "service.name",
+            "netstream-monitor-agent",
+        )])
+        .build();
+
+    let exporter = MetricExporter::builder()
+        .with_tonic()
+        .with_endpoint(METRICS_SERVER_ADDR.to_string())
+        .with_timeout(Duration::from_secs(5))
+        .build()?;
+
+    let reader = PeriodicReader::builder(exporter)
+        .with_interval(Duration::from_secs(5))
+        .build();
+
+    let provider = SdkMeterProvider::builder()
+        .with_reader(reader)
+        .with_resource(resource)
+        .build();
+
+    global::set_meter_provider(provider.clone());
+    Ok(provider)
+}
 
 pub async fn run() -> Result<()> {
     let mut signals = Signals::new([SIGINT, SIGTERM])?.fuse();
@@ -26,44 +59,27 @@ pub async fn run() -> Result<()> {
     let hashes = domain_mgr_raw.load_from_file(&path)?;
     let domain_mgr = Arc::new(domain_mgr_raw);
 
-    let (bpf_shared, packet_counts, ring_buf, xdp_link_id) = setup().await?;
+    let meter_provider = init_otlp_metrics()?;
+    info!("OpenTelemetry OTLP pipeline initialized targeting {METRICS_SERVER_ADDR}");
 
-    {
-        let mut bpf = bpf_shared.lock().await;
-        crate::bpf::maps::fill_malware_map(&mut bpf, &hashes)?;
-    }
+    let (bpf_shared, packet_counts, ring_buf, xdp_link_id) = setup(&hashes).await?;
 
     spawn_event_monitor(ring_buf, Arc::clone(&domain_mgr));
 
-    let mut client = MetricsServiceClient::connect(METRICS_SERVER_ADDR)
-        .await
-        .map_err(|e| anyhow!("Failed to connect to server: {e}"))?;
-
-    info!("Connected to gRPC server at {METRICS_SERVER_ADDR}");
+    let mut tick = interval(REPORT_INTERVAL);
 
     loop {
         tokio::select! {
+            biased;
+
             _ = signals.next() => {
                 info!("Shutdown signal received");
                 break;
             }
 
-            result = collect_metrics(&packet_counts) => {
-                match result {
-                    Ok(metrics) if !metrics.is_empty() => {
-                        let batch = MetricsBatch { metrics };
-                        let encoded = zstd::encode_all(prost::Message::encode_to_vec(&batch).as_slice(), 3)?;
-                        let request = CompressedMetricsBatch { compressed_data: encoded };
-
-                        if let Err(e) = client.send_metrics(request).await {
-                            warn!("Failed to send batch: {e}");
-                        }
-                    }
-                    Ok(_) => sleep(REPORT_INTERVAL).await,
-                    Err(e) => {
-                        warn!("Failed to collect metrics: {e}");
-                        sleep(REPORT_INTERVAL).await;
-                    }
+            _ = tick.tick() => {
+                if let Err(e) = collect_and_report_metrics(&packet_counts).await {
+                    warn!("Failed to process eBPF maps: {e}");
                 }
             }
         }
@@ -91,6 +107,10 @@ pub async fn run() -> Result<()> {
                 info!("Detached XDP program");
             }
         }
+    }
+
+    if let Err(e) = meter_provider.shutdown() {
+        warn!("Error during OpenTelemetry provider shutdown: {e}");
     }
 
     info!("Agent stopped gracefully");

@@ -26,6 +26,8 @@ int xdp_monitor(struct xdp_md *ctx)
     struct iphdr *ip = data + sizeof(*eth);
     if (data + sizeof(*eth) + sizeof(*ip) > data_end) { return XDP_PASS; }
 
+    bpf_printk("IP packet: proto=%d src=%x dst=%x\n", ip->protocol, ip->saddr, ip->daddr);
+
     struct packet_key key = {0};
     key.protocol          = ip->protocol;
     key.src_ip            = ip->saddr;
@@ -62,19 +64,26 @@ int xdp_monitor(struct xdp_md *ctx)
         }
     }
 
+    bpf_printk("Updating map: proto=%d src=%x dst=%x sport=%d dport=%d\n", key.protocol, key.src_ip, key.dst_ip,
+               key.src_port, key.dst_port);
+
     struct packet_value *value = bpf_map_lookup_elem(&packet_counts, &key);
     if (!value) {
+        bpf_printk("New entry\n");
         struct packet_value new_value = {
             .count        = 1,
             .timestamp    = bpf_ktime_get_ns(),
             .payload_size = payload_size,
         };
-        bpf_map_update_elem(&packet_counts, &key, &new_value, BPF_NOEXIST);
+        bpf_map_update_elem(&packet_counts, &key, &new_value, BPF_ANY);
     } else {
+        bpf_printk("Existing entry, count=%d\n", value->count);
         __sync_fetch_and_add(&value->count, 1);
         value->timestamp = bpf_ktime_get_ns();
         __sync_fetch_and_add(&value->payload_size, payload_size);
     }
+
+    bpf_printk("Map updated\n");
 
     return XDP_PASS;
 }

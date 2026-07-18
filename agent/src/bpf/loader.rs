@@ -13,7 +13,9 @@ use crate::config::bpf_object;
 use crate::utils::get_default_interface;
 use common::{PacketKey, PacketValue};
 
-pub async fn setup() -> Result<(
+pub async fn setup(
+    hashes: &[u64],
+) -> Result<(
     Arc<Mutex<Ebpf>>,
     Arc<Mutex<HashMap<aya::maps::MapData, PacketKey, PacketValue>>>,
     RingBuf<aya::maps::MapData>,
@@ -38,6 +40,17 @@ pub async fn setup() -> Result<(
     let link_id: XdpLinkId = xdp.attach(&interface, XdpFlags::default())?;
 
     info!("eBPF program attached to {}", interface);
+
+    {
+        let map = bpf
+            .map_mut("malware_domains")
+            .ok_or_else(|| anyhow!("Map 'malware_domains' not found"))?;
+        let mut malware_map: HashMap<_, u64, u8> = HashMap::try_from(map)?;
+        for &hash in hashes {
+            let _ = malware_map.insert(hash, 1, 0);
+        }
+        info!("BPF: loaded {} malware hashes", hashes.len());
+    }
 
     let ring_buf = {
         let map = bpf

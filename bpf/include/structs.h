@@ -10,17 +10,18 @@ struct packet_key
     __u16 dst_port;
 };
 
-struct packet_value
-{
+struct packet_value {
     __u64 count;
     __u64 timestamp;
     __u32 payload_size;
-} __attribute__((packed));
+    __u32 _padding;
+};
 
 struct malware_event_t {
     __u32 src_ip;
+    __u32 _padding;
     __u64 domain_hash;
-} __attribute__((packed));
+};
 
 struct
 {
