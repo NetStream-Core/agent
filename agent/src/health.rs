@@ -1,6 +1,6 @@
 use axum::{Json, Router, http::StatusCode, response::IntoResponse, routing::get};
 use serde::Serialize;
-use std::env;
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -39,17 +39,13 @@ pub async fn shutdown_health_server() {
     }
 }
 
-pub fn start_health_server() {
-    tokio::spawn(async {
-        let port = env::var("HEALTH_PORT").unwrap_or_else(|_| "8081".to_string());
-
+pub fn start_health_server(addr: SocketAddr) {
+    tokio::spawn(async move {
         let app = Router::new()
             .route("/health", get(health_handler))
             .route("/ready", get(ready_handler));
 
-        let addr = format!("0.0.0.0:{}", port);
-
-        let listener = match TcpListener::bind(&addr).await {
+        let listener = match TcpListener::bind(addr).await {
             Ok(l) => {
                 log::info!("Health server started on http://{}", addr);
                 l

@@ -6,6 +6,7 @@ mod telemetry;
 mod utils;
 
 use anyhow::Result;
+use config::Settings;
 use log::info;
 
 #[tokio::main]
@@ -16,13 +17,15 @@ async fn main() -> Result<()> {
         env!("CARGO_PKG_VERSION")
     );
 
-    health::start_health_server();
+    let settings = Settings::from_env()?;
+
+    health::start_health_server(settings.health_addr);
     tokio::time::sleep(std::time::Duration::from_millis(400)).await;
 
     health::mark_ready();
     info!("Health server started. Agent is ready.");
 
-    let result = telemetry::run::run().await;
+    let result = telemetry::run::run(&settings).await;
 
     health::shutdown_health_server().await;
     info!("Agent shutting down...");
