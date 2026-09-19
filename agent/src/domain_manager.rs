@@ -1,20 +1,11 @@
-use crate::utils::hash::xxh64_hash;
+use crate::utils::hash::{domain_hash, normalize};
 use anyhow::{Result, anyhow};
-use log::info;
+use log::{info, warn};
 use std::collections::HashMap;
 use std::path::Path;
 
 pub struct DomainManager {
     domains: HashMap<u64, String>,
-}
-
-fn encode_dns_qname(domain: &str) -> Vec<u8> {
-    let mut encoded = Vec::with_capacity(domain.len() + 1);
-    for label in domain.split('.') {
-        encoded.push(label.len() as u8);
-        encoded.extend_from_slice(label.as_bytes());
-    }
-    encoded
 }
 
 impl DomainManager {
@@ -34,23 +25,42 @@ impl DomainManager {
         })?;
 
         let mut hashes = Vec::new();
+        let mut skipped = 0;
         self.domains.clear();
 
-        for line in content.lines() {
-            let domain = line.trim();
-            if domain.is_empty() || domain.starts_with('#') {
+        for (index, line) in content.lines().enumerate() {
+            let entry = line.trim();
+            if entry.is_empty() || entry.starts_with('#') {
                 continue;
             }
 
-            let wire_form = encode_dns_qname(domain);
-            let hash = xxh64_hash(&wire_form);
-            self.domains.insert(hash, domain.to_string());
-            hashes.push(hash);
+            let hash = match domain_hash(entry) {
+                Ok(hash) => hash,
+                Err(reason) => {
+                    warn!("Skipping line {}: {} ({:?})", index + 1, reason, entry);
+                    skipped += 1;
+                    continue;
+                }
+            };
+
+            let name = normalize(entry);
+            match self.domains.get(&hash) {
+                Some(existing) if *existing == name => continue,
+                Some(existing) => warn!(
+                    "Hash collision between {} and {}, keeping the first",
+                    existing, name
+                ),
+                None => {
+                    self.domains.insert(hash, name);
+                    hashes.push(hash);
+                }
+            }
         }
 
         info!(
-            "DomainManager: loaded {} domains from file",
-            self.domains.len()
+            "DomainManager: loaded {} domains from file, skipped {} invalid lines",
+            self.domains.len(),
+            skipped
         );
         Ok(hashes)
     }
@@ -63,39 +73,82 @@ impl DomainManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
-    #[test]
-    fn encode_dns_qname_matches_wire_format() {
-        assert_eq!(
-            encode_dns_qname("google.com"),
-            vec![6, b'g', b'o', b'o', b'g', b'l', b'e', 3, b'c', b'o', b'm']
-        );
-    }
+    const GOOGLE_COM: u64 = 4282548222659472292;
+    const COM: u64 = 17442394860103835407;
 
-    #[test]
-    fn hash_of_wire_format_differs_from_hash_of_plain_string() {
-        let plain_hash = xxh64_hash("google.com".as_bytes());
-        let wire_hash = xxh64_hash(&encode_dns_qname("google.com"));
-        assert_ne!(plain_hash, wire_hash);
-        assert_eq!(wire_hash, 0xc61aac2d962ef56e);
-    }
-
-    #[test]
-    fn load_from_file_computes_wire_format_hash() {
-        use std::io::Write;
-
+    fn load(content: &str) -> (DomainManager, Vec<u64>) {
         let mut file = tempfile::NamedTempFile::new().expect("tmp file");
-        writeln!(file, "# comment, should be skipped").unwrap();
-        writeln!(file).unwrap();
-        writeln!(file, "google.com").unwrap();
+        write!(file, "{content}").unwrap();
 
         let mut mgr = DomainManager::new();
         let hashes = mgr.load_from_file(file.path()).expect("load ok");
+        (mgr, hashes)
+    }
 
-        assert_eq!(hashes, vec![0xc61aac2d962ef56e]);
+    #[test]
+    fn hashes_match_the_values_computed_by_the_bpf_code() {
+        assert_eq!(domain_hash("google.com"), Ok(GOOGLE_COM));
+        assert_eq!(domain_hash("com"), Ok(COM));
+    }
+
+    #[test]
+    fn suffix_hashes_match_the_values_computed_by_the_bpf_code() {
+        let expected = [
+            ("example", 2306238607482248458),
+            ("blocked-test.example", 10599123911636125748),
+            ("sub.blocked-test.example", 3691398819404742162),
+            ("www.sub.blocked-test.example", 4388018530618295000),
+        ];
+        for (name, hash) in expected {
+            assert_eq!(domain_hash(name), Ok(hash), "{name}");
+        }
+    }
+
+    #[test]
+    fn hash_ignores_case_and_trailing_dot() {
+        assert_eq!(domain_hash("GoOgLe.CoM."), Ok(GOOGLE_COM));
+        assert_eq!(domain_hash("  google.com  "), Ok(GOOGLE_COM));
+    }
+
+    #[test]
+    fn invalid_names_are_rejected() {
+        for name in [
+            "",
+            ".",
+            "a..b",
+            ".a.com",
+            "bad name.com",
+            "münchen.de",
+            &"a".repeat(64),
+            &format!("{}.com", "a".repeat(64)),
+            &vec!["a".repeat(60); 5].join("."),
+        ] {
+            assert!(domain_hash(name).is_err(), "{name:?} must be rejected");
+        }
+    }
+
+    #[test]
+    fn longest_valid_labels_are_accepted() {
+        assert!(domain_hash(&format!("{}.com", "a".repeat(63))).is_ok());
+    }
+
+    #[test]
+    fn load_from_file_normalizes_and_skips_invalid_lines() {
+        let (mgr, hashes) = load("# comment\n\nGoogle.COM\ngoogle.com.\nbad name.com\na..b\ncom\n");
+
+        assert_eq!(hashes, vec![GOOGLE_COM, COM]);
         assert_eq!(
-            mgr.get_domain_name(0xc61aac2d962ef56e),
+            mgr.get_domain_name(GOOGLE_COM),
             Some(&"google.com".to_string())
         );
+        assert_eq!(mgr.get_domain_name(COM), Some(&"com".to_string()));
+    }
+
+    #[test]
+    fn unknown_hash_has_no_name() {
+        let (mgr, _) = load("google.com\n");
+        assert_eq!(mgr.get_domain_name(1), None);
     }
 }
