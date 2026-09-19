@@ -13,6 +13,7 @@ fn find_include(header: &str, search_paths: &[&str]) -> Option<PathBuf> {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=../bpf/prog.bpf.c");
+    println!("cargo:rerun-if-changed=../bpf/include");
 
     let system_paths = [
         "/usr/include",
@@ -47,6 +48,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "-o",
         "../bpf/prog.bpf.o",
     ];
+
+    if std::env::var("PROFILE").as_deref() == Ok("debug") {
+        args.push("-DDEBUG");
+    }
 
     for path in &include_paths {
         args.push("-I");

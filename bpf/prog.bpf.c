@@ -37,7 +37,7 @@ int xdp_monitor(struct xdp_md *ctx)
     blocked = bpf_map_lookup_elem(&blocked_ips, &ip->daddr);
     if (blocked && *blocked == 1) { return XDP_DROP; }
 
-    bpf_printk("IP packet: proto=%d src=%x dst=%x\n", ip->protocol, ip->saddr, ip->daddr);
+    debug_printk("IP packet: proto=%d src=%x dst=%x\n", ip->protocol, ip->saddr, ip->daddr);
 
     struct packet_key key = {0};
     key.protocol          = ip->protocol;
@@ -75,12 +75,12 @@ int xdp_monitor(struct xdp_md *ctx)
         }
     }
 
-    bpf_printk("Updating map: proto=%d src=%x dst=%x sport=%d dport=%d\n", key.protocol, key.src_ip, key.dst_ip,
-               key.src_port, key.dst_port);
+    debug_printk("Updating map: proto=%d src=%x dst=%x sport=%d dport=%d\n", key.protocol, key.src_ip, key.dst_ip,
+                 key.src_port, key.dst_port);
 
     struct packet_value *value = bpf_map_lookup_elem(&packet_counts, &key);
     if (!value) {
-        bpf_printk("New entry\n");
+        debug_printk("New entry\n");
         struct packet_value new_value = {
             .count        = 1,
             .timestamp    = bpf_ktime_get_ns(),
@@ -88,13 +88,13 @@ int xdp_monitor(struct xdp_md *ctx)
         };
         bpf_map_update_elem(&packet_counts, &key, &new_value, BPF_ANY);
     } else {
-        bpf_printk("Existing entry, count=%d\n", value->count);
+        debug_printk("Existing entry, count=%d\n", value->count);
         __sync_fetch_and_add(&value->count, 1);
         value->timestamp = bpf_ktime_get_ns();
         __sync_fetch_and_add(&value->payload_size, payload_size);
     }
 
-    bpf_printk("Map updated\n");
+    debug_printk("Map updated\n");
 
     return XDP_PASS;
 }
@@ -106,7 +106,7 @@ int tc_dns_monitor(struct __sk_buff *skb)
     void *data     = (void *)(long)skb->data;
     void *ip_start;
 
-    bpf_printk("TC egress: packet seen, len=%d\n", skb->len);
+    debug_printk("TC egress: packet seen, len=%d\n", skb->len);
 
     if (IS_L3_INTERFACE) {
         ip_start = data;
@@ -119,11 +119,11 @@ int tc_dns_monitor(struct __sk_buff *skb)
 
     struct iphdr *ip = ip_start;
     if (ip_start + sizeof(*ip) > data_end) {
-        bpf_printk("TC egress: truncated IP header\n");
+        debug_printk("TC egress: truncated IP header\n");
         return TC_ACT_OK;
     }
 
-    bpf_printk("TC egress: IP proto=%d src=%x dst=%x\n", ip->protocol, ip->saddr, ip->daddr);
+    debug_printk("TC egress: IP proto=%d src=%x dst=%x\n", ip->protocol, ip->saddr, ip->daddr);
 
     if (ip->protocol != 17) { return TC_ACT_OK; } /* нас интересует только UDP/DNS здесь */
 
@@ -134,11 +134,11 @@ int tc_dns_monitor(struct __sk_buff *skb)
     struct udphdr *udp = ip_start + ip_header_len;
     if ((void *)udp + sizeof(*udp) > data_end) { return TC_ACT_OK; }
 
-    bpf_printk("TC egress: UDP sport=%d dport=%d\n", BPF_NTOHS(udp->source), BPF_NTOHS(udp->dest));
+    debug_printk("TC egress: UDP sport=%d dport=%d\n", BPF_NTOHS(udp->source), BPF_NTOHS(udp->dest));
 
     if (BPF_NTOHS(udp->dest) != DNS_PORT) { return TC_ACT_OK; }
 
-    bpf_printk("TC egress: DNS query detected, calling handle_dns\n");
+    debug_printk("TC egress: DNS query detected, calling handle_dns\n");
 
     void *dns_data = (void *)udp + sizeof(*udp);
     int   result   = handle_dns(dns_data, data_end, ip->saddr);
