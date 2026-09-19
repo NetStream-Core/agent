@@ -3,18 +3,28 @@
 
 struct packet_key
 {
-    __u32 protocol;
     __u32 src_ip;
     __u32 dst_ip;
     __u16 src_port;
     __u16 dst_port;
+    __u8  protocol;
+    __u8  direction;
+    __u16 _padding;
 };
 
 struct packet_value {
     __u64 count;
     __u64 timestamp;
     __u64 payload_size;
+    __u64 ip_bytes;
+    __u64 tcp_syn;
+    __u64 tcp_synack;
+    __u64 tcp_fin;
+    __u64 tcp_rst;
 };
+
+_Static_assert(sizeof(struct packet_key) == 16, "packet_key layout is shared with the agent");
+_Static_assert(sizeof(struct packet_value) == 64, "packet_value layout is shared with the agent");
 
 struct malware_event_t {
     __u32 src_ip;

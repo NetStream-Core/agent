@@ -6,6 +6,8 @@
 #define DNS_HEADER_SIZE 12
 #define MAX_QUERY_LENGTH 255
 #define SUSPICIOUS_QUERY_LENGTH 100
+#define DIRECTION_INGRESS 0
+#define DIRECTION_EGRESS 1
 
 #ifdef DEBUG
 #define debug_printk(fmt, ...) bpf_printk(fmt, ##__VA_ARGS__)
