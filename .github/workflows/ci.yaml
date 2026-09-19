@@ -44,6 +44,17 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
+      - name: Install cargo-audit and cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit,cargo-deny
+
+      - name: Audit dependencies
+        run: cargo audit
+
+      - name: Check dependency policy
+        run: cargo deny check
+
       - name: Check formatting
         run: cargo fmt -- --check
 
