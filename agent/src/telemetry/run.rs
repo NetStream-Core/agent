@@ -17,7 +17,7 @@ use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
 
 use opentelemetry_otlp::{MetricExporter, WithExportConfig};
 
-use crate::bpf::{collect_and_report_metrics, setup, spawn_event_monitor};
+use crate::bpf::{FlowTracker, collect_and_report_metrics, setup, spawn_event_monitor};
 use crate::config::Settings;
 use crate::health;
 
@@ -90,6 +90,7 @@ pub async fn run(settings: &Settings) -> Result<()> {
 
     let (bpf_shared, packet_counts, ring_buf, xdp_link_id, tc_link_id) =
         setup(&settings.bpf_object_file, &hashes).await?;
+    let mut flow_tracker = FlowTracker::default();
 
     spawn_event_monitor(ring_buf, Arc::clone(&domain_mgr));
 
@@ -109,7 +110,7 @@ pub async fn run(settings: &Settings) -> Result<()> {
             }
 
             _ = tick.tick() => {
-                if let Err(e) = collect_and_report_metrics(&packet_counts).await {
+                if let Err(e) = collect_and_report_metrics(&packet_counts, &mut flow_tracker).await {
                     warn!("Failed to process eBPF maps: {e}");
                 }
             }

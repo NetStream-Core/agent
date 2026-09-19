@@ -3,7 +3,7 @@ use aya::programs::tc::SchedClassifierLinkId;
 use aya::programs::xdp::XdpLinkId;
 use aya::{
     Ebpf, EbpfLoader,
-    maps::{HashMap, RingBuf},
+    maps::{HashMap, PerCpuHashMap, RingBuf},
     programs::{SchedClassifier, TcAttachType, Xdp, XdpFlags, tc},
 };
 use log::info;
@@ -28,7 +28,7 @@ pub async fn setup(
     hashes: &[u64],
 ) -> Result<(
     Arc<Mutex<Ebpf>>,
-    Arc<Mutex<HashMap<aya::maps::MapData, PacketKey, PacketValue>>>,
+    Arc<Mutex<PerCpuHashMap<aya::maps::MapData, PacketKey, PacketValue>>>,
     RingBuf<aya::maps::MapData>,
     XdpLinkId,
     SchedClassifierLinkId,
@@ -102,7 +102,7 @@ pub async fn setup(
         let map = bpf
             .take_map("packet_counts")
             .ok_or_else(|| anyhow!("Map 'packet_counts' not found"))?;
-        let hash = HashMap::<_, PacketKey, PacketValue>::try_from(map)?;
+        let hash = PerCpuHashMap::<_, PacketKey, PacketValue>::try_from(map)?;
         Arc::new(Mutex::new(hash))
     };
 

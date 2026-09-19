@@ -7,7 +7,7 @@ use std::time::Duration;
 use super::paths;
 
 const DEFAULT_OTLP_ENDPOINT: &str = "http://127.0.0.1:4317";
-const DEFAULT_REPORT_INTERVAL_MS: u64 = 100;
+const DEFAULT_REPORT_INTERVAL_MS: u64 = 1000;
 const DEFAULT_HEALTH_HOST: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 const DEFAULT_HEALTH_PORT: u16 = 8081;
 
@@ -85,7 +85,7 @@ mod tests {
     fn defaults_bind_health_to_loopback() {
         let s = settings(&[]).expect("defaults");
         assert_eq!(s.otlp_endpoint, "http://127.0.0.1:4317");
-        assert_eq!(s.report_interval, Duration::from_millis(100));
+        assert_eq!(s.report_interval, Duration::from_secs(1));
         assert_eq!(s.health_addr, "127.0.0.1:8081".parse().unwrap());
         assert_eq!(s.malware_domains_file, paths::malware_domains());
         assert_eq!(s.bpf_object_file, paths::bpf_object());
