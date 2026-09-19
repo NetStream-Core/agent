@@ -14,7 +14,7 @@ test: # Запустить тесты
     cargo test
 
 run: # Запустить приложение
-    sudo RUST_LOG=info ./target/debug/network-monitor-agent
+    sudo RUST_LOG=debug ./target/debug/network-monitor-agent
 
 update: # Обновить сабмодули
     git submodule update --init --remote
