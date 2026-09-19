@@ -14,9 +14,9 @@ use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
 use opentelemetry_otlp::{MetricExporter, WithExportConfig};
 
 use crate::bpf::{collect_and_report_metrics, setup, spawn_event_monitor};
-use crate::config::{METRICS_SERVER_ADDR, REPORT_INTERVAL, malware_domains};
+use crate::config::Settings;
 
-fn init_otlp_metrics() -> Result<SdkMeterProvider> {
+fn init_otlp_metrics(endpoint: &str) -> Result<SdkMeterProvider> {
     let resource = Resource::builder()
         .with_attributes(vec![opentelemetry::KeyValue::new(
             "service.name",
@@ -26,7 +26,7 @@ fn init_otlp_metrics() -> Result<SdkMeterProvider> {
 
     let exporter = MetricExporter::builder()
         .with_tonic()
-        .with_endpoint(METRICS_SERVER_ADDR.to_string())
+        .with_endpoint(endpoint.to_string())
         .with_timeout(Duration::from_secs(5))
         .build()?;
 
@@ -43,11 +43,11 @@ fn init_otlp_metrics() -> Result<SdkMeterProvider> {
     Ok(provider)
 }
 
-pub async fn run() -> Result<()> {
+pub async fn run(settings: &Settings) -> Result<()> {
     let mut signals = Signals::new([SIGINT, SIGTERM])?.fuse();
 
     let mut domain_mgr_raw = crate::domain_manager::DomainManager::new();
-    let path = malware_domains();
+    let path = &settings.malware_domains_file;
 
     if !path.exists() {
         return Err(anyhow!(
@@ -56,17 +56,21 @@ pub async fn run() -> Result<()> {
         ));
     }
 
-    let hashes = domain_mgr_raw.load_from_file(&path)?;
+    let hashes = domain_mgr_raw.load_from_file(path)?;
     let domain_mgr = Arc::new(domain_mgr_raw);
 
-    let meter_provider = init_otlp_metrics()?;
-    info!("OpenTelemetry OTLP pipeline initialized targeting {METRICS_SERVER_ADDR}");
+    let meter_provider = init_otlp_metrics(&settings.otlp_endpoint)?;
+    info!(
+        "OpenTelemetry OTLP pipeline initialized targeting {}",
+        settings.otlp_endpoint
+    );
 
-    let (bpf_shared, packet_counts, ring_buf, xdp_link_id, tc_link_id) = setup(&hashes).await?;
+    let (bpf_shared, packet_counts, ring_buf, xdp_link_id, tc_link_id) =
+        setup(&settings.bpf_object_file, &hashes).await?;
 
     spawn_event_monitor(ring_buf, Arc::clone(&domain_mgr));
 
-    let mut tick = interval(REPORT_INTERVAL);
+    let mut tick = interval(settings.report_interval);
 
     loop {
         tokio::select! {

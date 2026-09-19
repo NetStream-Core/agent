@@ -7,10 +7,10 @@ use aya::{
     programs::{SchedClassifier, TcAttachType, Xdp, XdpFlags, tc},
 };
 use log::info;
+use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::config::bpf_object;
 use crate::utils::get_default_interface;
 use common::{PacketKey, PacketValue};
 
@@ -24,6 +24,7 @@ fn is_l3_interface(iface: &str) -> bool {
 }
 
 pub async fn setup(
+    bpf_object: &Path,
     hashes: &[u64],
 ) -> Result<(
     Arc<Mutex<Ebpf>>,
@@ -45,14 +46,13 @@ pub async fn setup(
         }
     );
 
-    let path = bpf_object();
-    if !path.exists() {
-        return Err(anyhow!("eBPF file not found: {}", path.display()));
+    if !bpf_object.exists() {
+        return Err(anyhow!("eBPF file not found: {}", bpf_object.display()));
     }
 
     let mut bpf = EbpfLoader::new()
         .set_global("IS_L3_INTERFACE", &(is_l3 as u8), true)
-        .load_file(&path)?;
+        .load_file(bpf_object)?;
 
     let program = bpf
         .program_mut("xdp_monitor")
