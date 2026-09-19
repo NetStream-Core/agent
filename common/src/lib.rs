@@ -3,7 +3,7 @@
 use aya::Pod;
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct PacketKey {
     pub protocol: u32,
     pub src_ip: u32,
@@ -19,8 +19,7 @@ unsafe impl Pod for PacketKey {}
 pub struct PacketValue {
     pub count: u64,
     pub timestamp: u64,
-    pub payload_size: u32,
-    pub _padding: u32,
+    pub payload_size: u64,
 }
 
 unsafe impl Pod for PacketValue {}

@@ -13,8 +13,7 @@ struct packet_key
 struct packet_value {
     __u64 count;
     __u64 timestamp;
-    __u32 payload_size;
-    __u32 _padding;
+    __u64 payload_size;
 };
 
 struct malware_event_t {
@@ -25,7 +24,7 @@ struct malware_event_t {
 
 struct
 {
-    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(type, BPF_MAP_TYPE_LRU_PERCPU_HASH);
     __type(key, struct packet_key);
     __type(value, struct packet_value);
     __uint(max_entries, 10240);

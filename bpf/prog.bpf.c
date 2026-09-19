@@ -49,20 +49,28 @@ int xdp_monitor(struct xdp_md *ctx)
 
     if (ip_start + ip_header_len > data_end) { return XDP_PASS; }
 
-    __u32 payload_size = BPF_NTOHS(ip->tot_len) - ip_header_len;
+    __u32 total_len = BPF_NTOHS(ip->tot_len);
+    if (total_len < ip_header_len) { return XDP_PASS; }
+
+    __u32 payload_size = total_len - ip_header_len;
 
     if (ip->protocol == 6) {
         struct tcphdr *tcp = ip_start + ip_header_len;
 
         if ((void *)tcp + sizeof(*tcp) > data_end) { return XDP_PASS; }
 
+        __u32 tcp_header_len = tcp->doff * 4;
+        if (tcp_header_len < sizeof(*tcp) || tcp_header_len > payload_size) { return XDP_PASS; }
+
         key.src_port = BPF_NTOHS(tcp->source);
         key.dst_port = BPF_NTOHS(tcp->dest);
-        payload_size -= sizeof(*tcp);
+        payload_size -= tcp_header_len;
     } else if (ip->protocol == 17) {
         struct udphdr *udp = ip_start + ip_header_len;
 
         if ((void *)udp + sizeof(*udp) > data_end) { return XDP_PASS; }
+
+        if (payload_size < sizeof(*udp)) { return XDP_PASS; }
 
         key.src_port = BPF_NTOHS(udp->source);
         key.dst_port = BPF_NTOHS(udp->dest);
@@ -80,18 +88,14 @@ int xdp_monitor(struct xdp_md *ctx)
 
     struct packet_value *value = bpf_map_lookup_elem(&packet_counts, &key);
     if (!value) {
-        debug_printk("New entry\n");
-        struct packet_value new_value = {
-            .count        = 1,
-            .timestamp    = bpf_ktime_get_ns(),
-            .payload_size = payload_size,
-        };
-        bpf_map_update_elem(&packet_counts, &key, &new_value, BPF_ANY);
-    } else {
-        debug_printk("Existing entry, count=%d\n", value->count);
-        __sync_fetch_and_add(&value->count, 1);
+        struct packet_value zero = {};
+        bpf_map_update_elem(&packet_counts, &key, &zero, BPF_NOEXIST);
+        value = bpf_map_lookup_elem(&packet_counts, &key);
+    }
+    if (value) {
+        value->count += 1;
+        value->payload_size += payload_size;
         value->timestamp = bpf_ktime_get_ns();
-        __sync_fetch_and_add(&value->payload_size, payload_size);
     }
 
     debug_printk("Map updated\n");
