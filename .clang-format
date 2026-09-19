@@ -26,6 +26,7 @@ AllowShortLoopsOnASingleLine: true
 SpaceBeforeParens: ControlStatements
 SpaceAfterCStyleCast: false
 ReflowComments: true
+SortIncludes: Never
 InsertNewlineAtEOF: true
 MaxEmptyLinesToKeep: 1
 ForEachMacros:

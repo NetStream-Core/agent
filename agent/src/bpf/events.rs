@@ -7,7 +7,7 @@ use crate::domain_manager::DomainManager;
 use common::MalwareEvent;
 
 const SRC_IP_OFFSET: usize = 0;
-const DOMAIN_HASH_OFFSET: usize = 4;
+const DOMAIN_HASH_OFFSET: usize = 8;
 
 pub fn spawn_event_monitor(ring_buf: RingBuf<MapData>, domain_mgr: Arc<DomainManager>) {
     tokio::spawn(async move {

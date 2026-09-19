@@ -1,30 +1,41 @@
 #include <linux/types.h>
-
 #include <bpf/bpf_helpers.h>
-
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
 #include <linux/ip.h>
 #include <linux/tcp.h>
 #include <linux/udp.h>
+#include <linux/pkt_cls.h>
 
 #include "include/common.h"
 #include "include/dns.h"
 #include "include/structs.h"
 
+const volatile __u8 IS_L3_INTERFACE = 0;
+
 SEC("xdp")
 int xdp_monitor(struct xdp_md *ctx)
 {
-    void          *data_end = (void *)(long)ctx->data_end;
-    void          *data     = (void *)(long)ctx->data;
-    struct ethhdr *eth      = data;
+    void *data_end = (void *)(long)ctx->data_end;
+    void *data     = (void *)(long)ctx->data;
+    void *ip_start;
 
-    if (data + sizeof(*eth) > data_end) { return XDP_PASS; }
+    if (IS_L3_INTERFACE) {
+        ip_start = data;
+    } else {
+        struct ethhdr *eth = data;
+        if (data + sizeof(*eth) > data_end) { return XDP_PASS; }
+        if (eth->h_proto != __constant_htons(ETH_P_IP)) { return XDP_PASS; }
+        ip_start = data + sizeof(*eth);
+    }
 
-    if (eth->h_proto != __constant_htons(ETH_P_IP)) { return XDP_PASS; }
+    struct iphdr *ip = ip_start;
+    if (ip_start + sizeof(*ip) > data_end) { return XDP_PASS; }
 
-    struct iphdr *ip = data + sizeof(*eth);
-    if (data + sizeof(*eth) + sizeof(*ip) > data_end) { return XDP_PASS; }
+    __u8 *blocked = bpf_map_lookup_elem(&blocked_ips, &ip->saddr);
+    if (blocked && *blocked == 1) { return XDP_DROP; }
+    blocked = bpf_map_lookup_elem(&blocked_ips, &ip->daddr);
+    if (blocked && *blocked == 1) { return XDP_DROP; }
 
     bpf_printk("IP packet: proto=%d src=%x dst=%x\n", ip->protocol, ip->saddr, ip->daddr);
 
@@ -36,12 +47,12 @@ int xdp_monitor(struct xdp_md *ctx)
     __u32 ip_header_len = (ip->ihl & 0x0f) * 4;
     if (ip_header_len < sizeof(*ip)) { return XDP_PASS; }
 
-    if (data + sizeof(*eth) + ip_header_len > data_end) { return XDP_PASS; }
+    if (ip_start + ip_header_len > data_end) { return XDP_PASS; }
 
     __u32 payload_size = BPF_NTOHS(ip->tot_len) - ip_header_len;
 
     if (ip->protocol == 6) {
-        struct tcphdr *tcp = data + sizeof(*eth) + ip_header_len;
+        struct tcphdr *tcp = ip_start + ip_header_len;
 
         if ((void *)tcp + sizeof(*tcp) > data_end) { return XDP_PASS; }
 
@@ -49,7 +60,7 @@ int xdp_monitor(struct xdp_md *ctx)
         key.dst_port = BPF_NTOHS(tcp->dest);
         payload_size -= sizeof(*tcp);
     } else if (ip->protocol == 17) {
-        struct udphdr *udp = data + sizeof(*eth) + ip_header_len;
+        struct udphdr *udp = ip_start + ip_header_len;
 
         if ((void *)udp + sizeof(*udp) > data_end) { return XDP_PASS; }
 
@@ -58,8 +69,8 @@ int xdp_monitor(struct xdp_md *ctx)
         payload_size -= sizeof(*udp);
 
         if (key.dst_port == DNS_PORT) {
-            void *dns_data = data + sizeof(*eth) + ip_header_len + sizeof(*udp);
-            int   result   = handle_dns(ctx, dns_data, data_end, key.src_ip);
+            void *dns_data = ip_start + ip_header_len + sizeof(*udp);
+            int   result   = handle_dns(dns_data, data_end, key.src_ip);
             if (result != XDP_PASS) { return result; }
         }
     }
@@ -86,6 +97,56 @@ int xdp_monitor(struct xdp_md *ctx)
     bpf_printk("Map updated\n");
 
     return XDP_PASS;
+}
+
+SEC("classifier")
+int tc_dns_monitor(struct __sk_buff *skb)
+{
+    void *data_end = (void *)(long)skb->data_end;
+    void *data     = (void *)(long)skb->data;
+    void *ip_start;
+
+    bpf_printk("TC egress: packet seen, len=%d\n", skb->len);
+
+    if (IS_L3_INTERFACE) {
+        ip_start = data;
+    } else {
+        struct ethhdr *eth = data;
+        if (data + sizeof(*eth) > data_end) { return TC_ACT_OK; }
+        if (eth->h_proto != __constant_htons(ETH_P_IP)) { return TC_ACT_OK; }
+        ip_start = data + sizeof(*eth);
+    }
+
+    struct iphdr *ip = ip_start;
+    if (ip_start + sizeof(*ip) > data_end) {
+        bpf_printk("TC egress: truncated IP header\n");
+        return TC_ACT_OK;
+    }
+
+    bpf_printk("TC egress: IP proto=%d src=%x dst=%x\n", ip->protocol, ip->saddr, ip->daddr);
+
+    if (ip->protocol != 17) { return TC_ACT_OK; } /* нас интересует только UDP/DNS здесь */
+
+    __u32 ip_header_len = (ip->ihl & 0x0f) * 4;
+    if (ip_header_len < sizeof(*ip)) { return TC_ACT_OK; }
+    if (ip_start + ip_header_len > data_end) { return TC_ACT_OK; }
+
+    struct udphdr *udp = ip_start + ip_header_len;
+    if ((void *)udp + sizeof(*udp) > data_end) { return TC_ACT_OK; }
+
+    bpf_printk("TC egress: UDP sport=%d dport=%d\n", BPF_NTOHS(udp->source), BPF_NTOHS(udp->dest));
+
+    if (BPF_NTOHS(udp->dest) != DNS_PORT) { return TC_ACT_OK; }
+
+    bpf_printk("TC egress: DNS query detected, calling handle_dns\n");
+
+    void *dns_data = (void *)udp + sizeof(*udp);
+    int   result   = handle_dns(dns_data, data_end, ip->saddr);
+
+    /* ВАЖНО: коды возврата XDP и TC не совпадают числами (XDP_PASS == TC_ACT_SHOT == 2),
+       поэтому транслируем явно, а не возвращаем result напрямую. */
+    if (result == XDP_DROP) { return TC_ACT_SHOT; }
+    return TC_ACT_OK;
 }
 
 char _license[] SEC("license") = "GPL";

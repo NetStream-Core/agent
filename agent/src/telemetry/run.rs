@@ -62,7 +62,7 @@ pub async fn run() -> Result<()> {
     let meter_provider = init_otlp_metrics()?;
     info!("OpenTelemetry OTLP pipeline initialized targeting {METRICS_SERVER_ADDR}");
 
-    let (bpf_shared, packet_counts, ring_buf, xdp_link_id) = setup(&hashes).await?;
+    let (bpf_shared, packet_counts, ring_buf, xdp_link_id, tc_link_id) = setup(&hashes).await?;
 
     spawn_event_monitor(ring_buf, Arc::clone(&domain_mgr));
 
@@ -105,6 +105,26 @@ pub async fn run() -> Result<()> {
                 warn!("Failed to detach XDP program: {e}");
             } else {
                 info!("Detached XDP program");
+            }
+        }
+
+        if let Some(prog) = bpf.program_mut("tc_dns_monitor") {
+            use aya::programs::SchedClassifier;
+            use std::convert::TryInto;
+
+            let tc_prog: &mut SchedClassifier =
+                match TryInto::<&mut SchedClassifier>::try_into(prog) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        warn!("Failed to convert program to SchedClassifier: {e}");
+                        return Ok(());
+                    }
+                };
+
+            if let Err(e) = tc_prog.detach(tc_link_id) {
+                warn!("Failed to detach TC egress program: {e}");
+            } else {
+                info!("Detached TC egress program");
             }
         }
     }

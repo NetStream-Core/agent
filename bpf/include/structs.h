@@ -39,6 +39,14 @@ struct
     __uint(max_entries, 1024);
 } malware_domains SEC(".maps");
 
+struct
+{
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __type(key, __u32);
+    __type(value, __u8);
+    __uint(max_entries, 4096);
+} blocked_ips SEC(".maps");
+
 struct {
     __uint(type, BPF_MAP_TYPE_RINGBUF);
     __uint(max_entries, 256 * 4096);
