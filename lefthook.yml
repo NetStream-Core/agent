@@ -1,15 +1,13 @@
 pre-commit:
   commands:
-    linting:
-      run: just tidy
-      stage_fixed: true
-
-    building:
-      run: just build --release
-
-    testing:
-      run: just test
-
     formatting:
       run: just format
       stage_fixed: true
+
+    linting:
+      run: just lint
+
+pre-push:
+  commands:
+    testing:
+      run: just test

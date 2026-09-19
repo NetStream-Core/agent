@@ -21,12 +21,16 @@ update: # Обновить сабмодули
 
 format: # Форматировать код
     cargo fmt
-    find . -name "*.c" -exec clang-format -i {} \; -exec echo "Formatted: {}" \;
+    find . -name "*.c" ! -path "./target/*" -exec clang-format -i {} \; -exec echo "Formatted: {}" \;
 
-tidy: # Проверить код линтерами
+lint:
+    cargo clippy -- -D warnings
+    find . -name "*.c" ! -path "./bpf/*" ! -path "./target/*" -exec clang-tidy -checks='clang-analyzer-*,bugprone-*' {} -- -I. \;
+
+audit:
     cargo audit
     cargo deny check
-    cargo clippy -- -D warnings
-    find . -name "*.c" ! -path "./bpf/*" -exec clang-tidy -checks='clang-analyzer-*,bugprone-*' {} -- -I. \;
+
+tidy: lint audit
 
 all: format tidy build test # Полный цикл: форматирование, проверка, сборка и тесты
