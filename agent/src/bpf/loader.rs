@@ -64,7 +64,11 @@ pub async fn setup(
 
     info!("eBPF program attached to {}", interface);
 
-    let _ = tc::qdisc_add_clsact(&interface);
+    match tc::qdisc_add_clsact(&interface) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(anyhow!("Failed to add clsact qdisc on {interface}: {e}")),
+    }
 
     let tc_program = bpf
         .program_mut("tc_dns_monitor")

@@ -33,6 +33,10 @@ pub fn mark_ready() {
     IS_READY.store(true, Ordering::Release);
 }
 
+pub fn mark_not_ready() {
+    IS_READY.store(false, Ordering::Release);
+}
+
 pub async fn shutdown_health_server() {
     if let Some(tx) = SHUTDOWN_TX.get() {
         let _ = tx.send(());
@@ -74,4 +78,29 @@ pub fn start_health_server(addr: SocketAddr) {
 
         log::info!("Health server stopped");
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn readiness_follows_mark_ready_and_mark_not_ready() {
+        assert_eq!(
+            ready_handler().await.into_response().status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+
+        mark_ready();
+        assert_eq!(
+            ready_handler().await.into_response().status(),
+            StatusCode::OK
+        );
+
+        mark_not_ready();
+        assert_eq!(
+            ready_handler().await.into_response().status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
 }
