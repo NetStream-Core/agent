@@ -1,4 +1,8 @@
 use anyhow::{Result, anyhow};
+use aya::Ebpf;
+use aya::programs::tc::SchedClassifierLinkId;
+use aya::programs::xdp::XdpLinkId;
+use aya::programs::{SchedClassifier, Xdp};
 use futures_util::StreamExt;
 use log::{info, warn};
 use signal_hook::consts::{SIGINT, SIGTERM};
@@ -15,6 +19,7 @@ use opentelemetry_otlp::{MetricExporter, WithExportConfig};
 
 use crate::bpf::{collect_and_report_metrics, setup, spawn_event_monitor};
 use crate::config::Settings;
+use crate::health;
 
 fn init_otlp_metrics(endpoint: &str) -> Result<SdkMeterProvider> {
     let resource = Resource::builder()
@@ -41,6 +46,24 @@ fn init_otlp_metrics(endpoint: &str) -> Result<SdkMeterProvider> {
 
     global::set_meter_provider(provider.clone());
     Ok(provider)
+}
+
+fn detach_xdp(bpf: &mut Ebpf, link_id: XdpLinkId) -> Result<()> {
+    let xdp: &mut Xdp = bpf
+        .program_mut("xdp_monitor")
+        .ok_or_else(|| anyhow!("Program 'xdp_monitor' not found"))?
+        .try_into()?;
+    xdp.detach(link_id)?;
+    Ok(())
+}
+
+fn detach_tc(bpf: &mut Ebpf, link_id: SchedClassifierLinkId) -> Result<()> {
+    let tc_prog: &mut SchedClassifier = bpf
+        .program_mut("tc_dns_monitor")
+        .ok_or_else(|| anyhow!("Program 'tc_dns_monitor' not found"))?
+        .try_into()?;
+    tc_prog.detach(link_id)?;
+    Ok(())
 }
 
 pub async fn run(settings: &Settings) -> Result<()> {
@@ -70,6 +93,9 @@ pub async fn run(settings: &Settings) -> Result<()> {
 
     spawn_event_monitor(ring_buf, Arc::clone(&domain_mgr));
 
+    health::mark_ready();
+    info!("Agent is ready");
+
     let mut tick = interval(settings.report_interval);
 
     loop {
@@ -78,6 +104,7 @@ pub async fn run(settings: &Settings) -> Result<()> {
 
             _ = signals.next() => {
                 info!("Shutdown signal received");
+                health::mark_not_ready();
                 break;
             }
 
@@ -93,43 +120,14 @@ pub async fn run(settings: &Settings) -> Result<()> {
     {
         let mut bpf = bpf_shared.lock().await;
 
-        if let Some(prog) = bpf.program_mut("xdp_monitor") {
-            use aya::programs::Xdp;
-            use std::convert::TryInto;
-
-            let xdp: &mut Xdp = match TryInto::<&mut Xdp>::try_into(prog) {
-                Ok(p) => p,
-                Err(e) => {
-                    warn!("Failed to convert program to Xdp: {e}");
-                    return Ok(());
-                }
-            };
-
-            if let Err(e) = xdp.detach(xdp_link_id) {
-                warn!("Failed to detach XDP program: {e}");
-            } else {
-                info!("Detached XDP program");
-            }
+        match detach_xdp(&mut bpf, xdp_link_id) {
+            Ok(()) => info!("Detached XDP program"),
+            Err(e) => warn!("Failed to detach XDP program: {e}"),
         }
 
-        if let Some(prog) = bpf.program_mut("tc_dns_monitor") {
-            use aya::programs::SchedClassifier;
-            use std::convert::TryInto;
-
-            let tc_prog: &mut SchedClassifier =
-                match TryInto::<&mut SchedClassifier>::try_into(prog) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        warn!("Failed to convert program to SchedClassifier: {e}");
-                        return Ok(());
-                    }
-                };
-
-            if let Err(e) = tc_prog.detach(tc_link_id) {
-                warn!("Failed to detach TC egress program: {e}");
-            } else {
-                info!("Detached TC egress program");
-            }
+        match detach_tc(&mut bpf, tc_link_id) {
+            Ok(()) => info!("Detached TC egress program"),
+            Err(e) => warn!("Failed to detach TC egress program: {e}"),
         }
     }
 

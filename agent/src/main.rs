@@ -20,10 +20,6 @@ async fn main() -> Result<()> {
     let settings = Settings::from_env()?;
 
     health::start_health_server(settings.health_addr);
-    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-
-    health::mark_ready();
-    info!("Health server started. Agent is ready.");
 
     let result = telemetry::run::run(&settings).await;
 
