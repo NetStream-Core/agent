@@ -18,7 +18,7 @@ use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
 use opentelemetry_otlp::{MetricExporter, WithExportConfig};
 
 use crate::bpf::{
-    CollectContext, FlowTracker, LoadOptions, collect_and_report_metrics, setup,
+    CollectContext, FlowTracker, LoadOptions, OverheadReporter, collect_and_report_metrics, setup,
     spawn_event_monitor,
 };
 use crate::config::Settings;
@@ -126,6 +126,7 @@ pub async fn run(settings: &Settings) -> Result<()> {
     let xdp_link_id = loaded.xdp_link_id;
     let tc_link_id = loaded.tc_link_id;
     let mut flow_tracker = FlowTracker::default();
+    let mut overhead = OverheadReporter::new(settings.bpf_stats);
 
     spawn_event_monitor(
         loaded.malware_events,
@@ -158,6 +159,7 @@ pub async fn run(settings: &Settings) -> Result<()> {
                 if let Err(e) = collect_and_report_metrics(&packet_counts, &mut flow_tracker, &events, &collect_context(interval_ms)).await {
                     warn!("Failed to process eBPF maps: {e}");
                 }
+                overhead.report(&bpf_shared).await;
             }
         }
     }
