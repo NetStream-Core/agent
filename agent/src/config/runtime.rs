@@ -35,6 +35,7 @@ pub struct Settings {
     pub flow_table_entries: u32,
     pub flow_log_top_n: usize,
     pub new_flows_per_second: u32,
+    pub bpf_stats: bool,
 }
 
 impl Settings {
@@ -96,6 +97,8 @@ impl Settings {
             ));
         }
 
+        let bpf_stats = parse_or(&lookup, "BPF_STATS", true)?;
+
         Ok(Self {
             otlp_endpoint,
             report_interval: Duration::from_millis(interval_ms),
@@ -112,6 +115,7 @@ impl Settings {
             flow_table_entries,
             flow_log_top_n,
             new_flows_per_second,
+            bpf_stats,
         })
     }
 }
@@ -161,6 +165,7 @@ mod tests {
         assert_eq!(s.flow_table_entries, 10240);
         assert_eq!(s.flow_log_top_n, 2000);
         assert_eq!(s.new_flows_per_second, 100);
+        assert!(s.bpf_stats);
     }
 
     #[test]
@@ -198,6 +203,12 @@ mod tests {
         assert!(!s.export_logs);
         assert_eq!(s.host_id.as_deref(), Some("sensor-7"));
         assert!(settings(&[("EXPORT_LOGS", "sometimes")]).is_err());
+    }
+
+    #[test]
+    fn bpf_stats_can_be_disabled() {
+        assert!(!settings(&[("BPF_STATS", "false")]).unwrap().bpf_stats);
+        assert!(settings(&[("BPF_STATS", "maybe")]).is_err());
     }
 
     #[test]
