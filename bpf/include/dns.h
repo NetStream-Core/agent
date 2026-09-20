@@ -14,6 +14,15 @@ struct
     __type(value, struct dns_scratch);
 } dns_scratch_map SEC(".maps");
 
+const volatile __u8  RESPONSE_MODE     = MODE_MONITOR;
+const volatile __u64 QUARANTINE_TTL_NS = 60000000000ULL;
+
+static __always_inline int is_allowlisted(__u32 addr)
+{
+    struct allowlist_key key = {.prefixlen = 32, .addr = addr};
+    return bpf_map_lookup_elem(&quarantine_allowlist, &key) != NULL;
+}
+
 static __always_inline int handle_dns(void *data, void *data_end, __u32 src_ip)
 {
     void *dns_data = data;
@@ -34,17 +43,26 @@ static __always_inline int handle_dns(void *data, void *data_end, __u32 src_ip)
         __u8 *is_malware  = bpf_map_lookup_elem(&malware_domains, &domain_hash);
         if (!is_malware || *is_malware != 1) { continue; }
 
-        __u8 blocked = 1;
-        bpf_map_update_elem(&blocked_ips, &src_ip, &blocked, BPF_ANY);
+        __u32 action = RESPONSE_MODE == MODE_MONITOR ? ACTION_OBSERVED : ACTION_DROPPED;
+
+        if (RESPONSE_MODE == MODE_GATEWAY && !is_allowlisted(src_ip)) {
+            struct block_entry entry = {
+                .expires_ns  = bpf_ktime_get_ns() + QUARANTINE_TTL_NS,
+                .domain_hash = domain_hash,
+            };
+            bpf_map_update_elem(&blocked_ips, &src_ip, &entry, BPF_ANY);
+            action = ACTION_QUARANTINED;
+        }
 
         struct malware_event_t *e;
         e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
         if (e) {
             e->src_ip      = src_ip;
+            e->action      = action;
             e->domain_hash = domain_hash;
             bpf_ringbuf_submit(e, 0);
         }
-        return XDP_DROP;
+        return RESPONSE_MODE == MODE_MONITOR ? XDP_PASS : XDP_DROP;
     }
 
     return XDP_PASS;

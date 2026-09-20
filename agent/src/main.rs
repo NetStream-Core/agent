@@ -2,6 +2,7 @@ mod bpf;
 mod config;
 mod domain_manager;
 mod health;
+mod response;
 mod telemetry;
 mod utils;
 

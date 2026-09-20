@@ -20,6 +20,7 @@ use opentelemetry_otlp::{MetricExporter, WithExportConfig};
 use crate::bpf::{FlowTracker, collect_and_report_metrics, setup, spawn_event_monitor};
 use crate::config::Settings;
 use crate::health;
+use crate::response::ResponseConfig;
 
 fn init_otlp_metrics(endpoint: &str) -> Result<SdkMeterProvider> {
     let resource = Resource::builder()
@@ -88,8 +89,9 @@ pub async fn run(settings: &Settings) -> Result<()> {
         settings.otlp_endpoint
     );
 
+    let response = ResponseConfig::from_settings(settings);
     let (bpf_shared, packet_counts, ring_buf, xdp_link_id, tc_link_id) =
-        setup(&settings.bpf_object_file, &hashes).await?;
+        setup(&settings.bpf_object_file, &hashes, &response).await?;
     let mut flow_tracker = FlowTracker::default();
 
     spawn_event_monitor(ring_buf, Arc::clone(&domain_mgr));
