@@ -6,6 +6,7 @@ use common::{
 };
 use log;
 use opentelemetry::{KeyValue, global};
+use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 use std::{net::Ipv4Addr, sync::Arc};
 use tokio::sync::Mutex;
@@ -130,7 +131,7 @@ fn select_top(
         return (deltas, 0);
     }
 
-    deltas.sort_by(|a, b| b.1.count.cmp(&a.1.count));
+    deltas.sort_by_key(|delta| Reverse(delta.1.count));
     let leftover = deltas.split_off(top_n);
     let merged_flows = leftover.len();
 
