@@ -4,7 +4,6 @@ default: # Основные команды
 clean: # Очистить сгенерированные файлы и сборки
     cargo clean
     rm -f ./bpf/prog.bpf.o
-    rm -f ./proto/metrics.rs
     rm -rf target
 
 build *ARGS: # Собрать проект
@@ -20,9 +19,6 @@ test-c:
 
 run: # Запустить приложение
     sudo RUST_LOG=debug ./target/debug/network-monitor-agent
-
-update: # Обновить сабмодули
-    git submodule update --init --remote
 
 format: # Форматировать код
     cargo fmt
