@@ -64,5 +64,11 @@ jobs:
       - name: Run tests
         run: cargo test
 
+      - name: Host tests for eBPF helpers
+        run: |
+          mkdir -p target
+          clang -Wall -Wno-unused-function -I bpf/include -o target/test_helpers bpf/tests/test_helpers.c
+          ./target/test_helpers
+
       - name: Build Release
         run: cargo build --release

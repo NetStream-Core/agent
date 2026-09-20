@@ -9,10 +9,16 @@
 #include <linux/tcp.h>
 #include <linux/udp.h>
 
+#include "budget.h"
 #include "common.h"
+#include "ports.h"
 #include "structs.h"
 
-const volatile __u8 IS_L3_INTERFACE = 0;
+const volatile __u8  IS_L3_INTERFACE    = 0;
+const volatile __u8  COLLAPSE_EPHEMERAL = 1;
+const volatile __u16 EPHEMERAL_MIN      = 32768;
+const volatile __u16 EPHEMERAL_MAX      = 60999;
+const volatile __u32 NEW_FLOW_BUDGET    = 32;
 
 struct flow_ctx
 {
@@ -101,17 +107,52 @@ static __always_inline int parse_flow(struct iphdr *ip, void *data_end, __u8 dir
         fc->is_dns = fc->key.dst_port == DNS_PORT;
     }
 
+    if (COLLAPSE_EPHEMERAL && (ip->protocol == 6 || ip->protocol == 17)) {
+        collapse_ephemeral_port(&fc->key.src_port, &fc->key.dst_port, EPHEMERAL_MIN, EPHEMERAL_MAX);
+    }
+
     return 0;
+}
+
+static __always_inline struct packet_value *insert_slot(struct packet_key *key)
+{
+    struct packet_value zero = {};
+    bpf_map_update_elem(&packet_counts, key, &zero, BPF_NOEXIST);
+    return bpf_map_lookup_elem(&packet_counts, key);
+}
+
+static __always_inline struct packet_value *flow_slot(struct packet_key *key)
+{
+    struct packet_value *value = bpf_map_lookup_elem(&packet_counts, key);
+    if (value) { return value; }
+
+    __u32 budget_key            = 0;
+    struct budget_state *budget = bpf_map_lookup_elem(&flow_budget, &budget_key);
+    __u64 now                   = bpf_ktime_get_ns();
+
+    if (budget && budget_take_full(budget, now, NEW_FLOW_BUDGET)) { return insert_slot(key); }
+
+    struct packet_key partial = *key;
+    partial.src_port          = 0;
+    partial.flags             = KEY_FLAG_AGGREGATED;
+
+    value = bpf_map_lookup_elem(&packet_counts, &partial);
+    if (value) { return value; }
+    if (budget && budget_take_partial(budget, now, NEW_FLOW_BUDGET)) { return insert_slot(&partial); }
+
+    struct packet_key merged = *key;
+    merged.src_port          = 0;
+    merged.dst_port          = 0;
+    merged.flags             = KEY_FLAG_AGGREGATED | KEY_FLAG_PORTS_MERGED;
+
+    value = bpf_map_lookup_elem(&packet_counts, &merged);
+    if (value) { return value; }
+    return insert_slot(&merged);
 }
 
 static __always_inline void count_flow(struct flow_ctx *fc)
 {
-    struct packet_value *value = bpf_map_lookup_elem(&packet_counts, &fc->key);
-    if (!value) {
-        struct packet_value zero = {};
-        bpf_map_update_elem(&packet_counts, &fc->key, &zero, BPF_NOEXIST);
-        value = bpf_map_lookup_elem(&packet_counts, &fc->key);
-    }
+    struct packet_value *value = flow_slot(&fc->key);
     if (!value) { return; }
 
     value->count += 1;

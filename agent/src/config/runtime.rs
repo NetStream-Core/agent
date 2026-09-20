@@ -12,6 +12,11 @@ const DEFAULT_REPORT_INTERVAL_MS: u64 = 1000;
 const DEFAULT_HEALTH_HOST: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 const DEFAULT_HEALTH_PORT: u16 = 8081;
 const DEFAULT_QUARANTINE_TTL_SECS: u64 = 60;
+const DEFAULT_FLOW_TABLE_ENTRIES: u32 = 10240;
+const MIN_FLOW_TABLE_ENTRIES: u32 = 1024;
+const DEFAULT_FLOW_LOG_TOP_N: usize = 2000;
+const DEFAULT_NEW_FLOWS_PER_SECOND: u32 = 100;
+const MIN_NEW_FLOWS_PER_SECOND: u32 = 10;
 
 #[derive(Debug, Clone)]
 pub struct Settings {
@@ -26,6 +31,10 @@ pub struct Settings {
     pub dns_events: bool,
     pub export_logs: bool,
     pub host_id: Option<String>,
+    pub collapse_ephemeral_ports: bool,
+    pub flow_table_entries: u32,
+    pub flow_log_top_n: usize,
+    pub new_flows_per_second: u32,
 }
 
 impl Settings {
@@ -70,6 +79,22 @@ impl Settings {
         let dns_events = parse_or(&lookup, "DNS_EVENTS", true)?;
         let export_logs = parse_or(&lookup, "EXPORT_LOGS", true)?;
         let host_id = lookup("HOST_ID");
+        let collapse_ephemeral_ports = parse_or(&lookup, "COLLAPSE_EPHEMERAL_PORTS", true)?;
+        let flow_table_entries =
+            parse_or(&lookup, "FLOW_TABLE_ENTRIES", DEFAULT_FLOW_TABLE_ENTRIES)?;
+        if flow_table_entries < MIN_FLOW_TABLE_ENTRIES {
+            return Err(anyhow!(
+                "FLOW_TABLE_ENTRIES must be at least {MIN_FLOW_TABLE_ENTRIES}"
+            ));
+        }
+        let flow_log_top_n = parse_or(&lookup, "FLOW_LOG_TOP_N", DEFAULT_FLOW_LOG_TOP_N)?;
+        let new_flows_per_second =
+            parse_or(&lookup, "FLOW_NEW_PER_SECOND", DEFAULT_NEW_FLOWS_PER_SECOND)?;
+        if new_flows_per_second < MIN_NEW_FLOWS_PER_SECOND {
+            return Err(anyhow!(
+                "FLOW_NEW_PER_SECOND must be at least {MIN_NEW_FLOWS_PER_SECOND}"
+            ));
+        }
 
         Ok(Self {
             otlp_endpoint,
@@ -83,6 +108,10 @@ impl Settings {
             dns_events,
             export_logs,
             host_id,
+            collapse_ephemeral_ports,
+            flow_table_entries,
+            flow_log_top_n,
+            new_flows_per_second,
         })
     }
 }
@@ -128,6 +157,39 @@ mod tests {
         assert!(s.dns_events);
         assert!(s.export_logs);
         assert_eq!(s.host_id, None);
+        assert!(s.collapse_ephemeral_ports);
+        assert_eq!(s.flow_table_entries, 10240);
+        assert_eq!(s.flow_log_top_n, 2000);
+        assert_eq!(s.new_flows_per_second, 100);
+    }
+
+    #[test]
+    fn new_flow_budget_is_configurable_and_validated() {
+        assert_eq!(
+            settings(&[("FLOW_NEW_PER_SECOND", "1000")])
+                .unwrap()
+                .new_flows_per_second,
+            1000
+        );
+        assert!(settings(&[("FLOW_NEW_PER_SECOND", "5")]).is_err());
+        assert!(settings(&[("FLOW_NEW_PER_SECOND", "lots")]).is_err());
+    }
+
+    #[test]
+    fn flow_limits_are_configurable_and_validated() {
+        let s = settings(&[
+            ("COLLAPSE_EPHEMERAL_PORTS", "false"),
+            ("FLOW_TABLE_ENTRIES", "65536"),
+            ("FLOW_LOG_TOP_N", "0"),
+        ])
+        .unwrap();
+        assert!(!s.collapse_ephemeral_ports);
+        assert_eq!(s.flow_table_entries, 65536);
+        assert_eq!(s.flow_log_top_n, 0);
+
+        assert!(settings(&[("FLOW_TABLE_ENTRIES", "100")]).is_err());
+        assert!(settings(&[("FLOW_TABLE_ENTRIES", "many")]).is_err());
+        assert!(settings(&[("FLOW_LOG_TOP_N", "-1")]).is_err());
     }
 
     #[test]

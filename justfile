@@ -13,6 +13,11 @@ build *ARGS: # Собрать проект
 test: # Запустить тесты
     cargo test
 
+test-c:
+    mkdir -p target
+    clang -Wall -Wno-unused-function -I bpf/include -o target/test_helpers bpf/tests/test_helpers.c
+    ./target/test_helpers
+
 run: # Запустить приложение
     sudo RUST_LOG=debug ./target/debug/network-monitor-agent
 
@@ -33,4 +38,4 @@ audit:
 
 tidy: lint audit
 
-all: format tidy build test # Полный цикл: форматирование, проверка, сборка и тесты
+all: format tidy build test test-c # Полный цикл: форматирование, проверка, сборка и тесты

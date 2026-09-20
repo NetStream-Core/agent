@@ -40,6 +40,22 @@ fn parse_dev_from_route_output(output: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+const DEFAULT_EPHEMERAL_RANGE: (u16, u16) = (32768, 60999);
+
+pub fn parse_port_range(content: &str) -> Option<(u16, u16)> {
+    let mut parts = content.split_whitespace();
+    let low: u16 = parts.next()?.parse().ok()?;
+    let high: u16 = parts.next()?.parse().ok()?;
+    (low <= high).then_some((low, high))
+}
+
+pub fn ephemeral_port_range() -> (u16, u16) {
+    std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range")
+        .ok()
+        .and_then(|content| parse_port_range(&content))
+        .unwrap_or(DEFAULT_EPHEMERAL_RANGE)
+}
+
 pub fn get_default_interface() -> Result<String> {
     if let Ok(name) = std::env::var("NETWORK_INTERFACE") {
         return Ok(name);
@@ -79,6 +95,21 @@ mod tests {
             parse_dev_from_route_output(output),
             Some("enp9s0".to_string())
         );
+    }
+
+    #[test]
+    fn port_range_is_parsed_from_proc_format() {
+        assert_eq!(parse_port_range("32768\t60999\n"), Some((32768, 60999)));
+        assert_eq!(parse_port_range("1024 65535"), Some((1024, 65535)));
+    }
+
+    #[test]
+    fn invalid_port_ranges_are_rejected() {
+        assert_eq!(parse_port_range(""), None);
+        assert_eq!(parse_port_range("32768"), None);
+        assert_eq!(parse_port_range("high low"), None);
+        assert_eq!(parse_port_range("60999 32768"), None);
+        assert_eq!(parse_port_range("1 70000"), None);
     }
 
     #[test]

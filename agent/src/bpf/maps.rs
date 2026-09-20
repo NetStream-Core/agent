@@ -1,13 +1,16 @@
 use anyhow::Result;
 use aya::maps::{MapData, PerCpuHashMap};
-use common::{DIRECTION_EGRESS, DIRECTION_INGRESS, PacketKey, PacketValue};
+use common::{
+    DIRECTION_EGRESS, DIRECTION_INGRESS, KEY_FLAG_AGGREGATED, KEY_FLAG_PORTS_MERGED, PacketKey,
+    PacketValue,
+};
 use log;
 use opentelemetry::{KeyValue, global};
 use std::collections::{HashMap, HashSet};
 use std::{net::Ipv4Addr, sync::Arc};
 use tokio::sync::Mutex;
 
-use crate::telemetry::logs::{EventLog, FlowRecord};
+use crate::telemetry::logs::{EventLog, FlowRecord, network_transport};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct Totals {
@@ -48,6 +51,13 @@ impl Totals {
         }
     }
 
+    fn accumulate(&mut self, other: &Self) {
+        self.count = self.count.saturating_add(other.count);
+        self.payload_size = self.payload_size.saturating_add(other.payload_size);
+        self.ip_bytes = self.ip_bytes.saturating_add(other.ip_bytes);
+        self.add_tcp_flags(other);
+    }
+
     fn add_tcp_flags(&mut self, other: &Self) {
         self.tcp_syn = self.tcp_syn.saturating_add(other.tcp_syn);
         self.tcp_synack = self.tcp_synack.saturating_add(other.tcp_synack);
@@ -68,6 +78,8 @@ impl Totals {
 #[derive(Default)]
 pub struct FlowTracker {
     previous: HashMap<PacketKey, Totals>,
+    under_pressure: bool,
+    overflowing: bool,
 }
 
 impl FlowTracker {
@@ -79,6 +91,75 @@ impl FlowTracker {
     fn retain_seen(&mut self, seen: &HashSet<PacketKey>) {
         self.previous.retain(|key, _| seen.contains(key));
     }
+
+    fn note_overflow(&mut self, overflowing: bool) -> bool {
+        let started = overflowing && !self.overflowing;
+        self.overflowing = overflowing;
+        started
+    }
+
+    fn note_pressure(&mut self, active: usize, capacity: usize) -> bool {
+        let pressured = capacity > 0 && active * 2 >= capacity;
+        let started = pressured && !self.under_pressure;
+        self.under_pressure = pressured;
+        started
+    }
+}
+
+pub struct CollectContext {
+    pub interval_ms: u64,
+    pub top_n: usize,
+    pub capacity: usize,
+}
+
+fn aggregation_level(flags: u16) -> u8 {
+    if flags & KEY_FLAG_PORTS_MERGED != 0 {
+        2
+    } else if flags & KEY_FLAG_AGGREGATED != 0 {
+        1
+    } else {
+        0
+    }
+}
+
+fn select_top(
+    mut deltas: Vec<(PacketKey, Totals)>,
+    top_n: usize,
+) -> (Vec<(PacketKey, Totals)>, usize) {
+    if top_n == 0 || deltas.len() <= top_n {
+        return (deltas, 0);
+    }
+
+    deltas.sort_by(|a, b| b.1.count.cmp(&a.1.count));
+    let leftover = deltas.split_off(top_n);
+    let merged_flows = leftover.len();
+
+    let mut merged: HashMap<PacketKey, Totals> = HashMap::new();
+    for (key, delta) in leftover {
+        let aggregated = PacketKey {
+            src_port: 0,
+            dst_port: 0,
+            flags: key.flags | KEY_FLAG_AGGREGATED | KEY_FLAG_PORTS_MERGED,
+            ..key
+        };
+        merged.entry(aggregated).or_default().accumulate(&delta);
+    }
+
+    for (key, delta) in merged {
+        match deltas.iter_mut().find(|(kept, _)| *kept == key) {
+            Some((_, existing)) => existing.accumulate(&delta),
+            None => deltas.push((key, delta)),
+        }
+    }
+
+    (deltas, merged_flows)
+}
+
+fn metric_attributes(direction: u8, protocol: u8) -> [KeyValue; 2] {
+    [
+        KeyValue::new("direction", direction_label(direction)),
+        KeyValue::new("transport", network_transport(protocol)),
+    ]
 }
 
 fn ipv4_from_network_order(raw: u32) -> Ipv4Addr {
@@ -93,22 +174,11 @@ pub fn direction_label(direction: u8) -> &'static str {
     }
 }
 
-fn flow_attributes(key: &PacketKey) -> [KeyValue; 6] {
-    [
-        KeyValue::new("protocol", key.protocol.to_string()),
-        KeyValue::new("direction", direction_label(key.direction)),
-        KeyValue::new("src_ip", ipv4_from_network_order(key.src_ip).to_string()),
-        KeyValue::new("dst_ip", ipv4_from_network_order(key.dst_ip).to_string()),
-        KeyValue::new("src_port", (key.src_port as i64).to_string()),
-        KeyValue::new("dst_port", (key.dst_port as i64).to_string()),
-    ]
-}
-
 pub async fn collect_and_report_metrics(
     packet_counts: &Arc<Mutex<PerCpuHashMap<MapData, PacketKey, PacketValue>>>,
     tracker: &mut FlowTracker,
     events: &EventLog,
-    interval_ms: u64,
+    context: &CollectContext,
 ) -> Result<usize> {
     let meter = global::meter("netstream_agent");
 
@@ -132,51 +202,88 @@ pub async fn collect_and_report_metrics(
         .with_description("Total TCP packets by flag, aggregated over all flows")
         .build();
 
+    let table_entries = meter
+        .u64_gauge("netstream_flow_table_entries")
+        .with_description("Flows currently held in the kernel flow table")
+        .build();
+
+    let active_flows = meter
+        .u64_gauge("netstream_flow_active")
+        .with_description("Flows that carried packets during the last interval")
+        .build();
+
+    let overflow_counter = meter
+        .u64_counter("netstream_flow_overflow_packets_total")
+        .with_description(
+            "Packets counted in aggregated flows because the new-flow budget was exhausted",
+        )
+        .build();
+
+    let omitted_counter = meter
+        .u64_counter("netstream_flow_logs_merged_total")
+        .with_description("Flows merged into aggregated records by the per-interval log limit")
+        .build();
+
     let map = packet_counts.lock().await;
 
     let mut seen = HashSet::new();
-    let mut flags_by_direction: HashMap<u8, Totals> = HashMap::new();
-    let mut reported = 0;
+    let mut deltas = Vec::new();
 
     for entry in map.iter() {
         let (key, values) = entry?;
         seen.insert(key);
 
         let delta = tracker.advance(key, Totals::from_cpus(&values));
-        if delta.count == 0 {
-            continue;
+        if delta.count > 0 {
+            deltas.push((key, delta));
         }
-        reported += 1;
-
-        events.flow(&FlowRecord {
-            direction: key.direction,
-            protocol: key.protocol,
-            src_ip: ipv4_from_network_order(key.src_ip),
-            dst_ip: ipv4_from_network_order(key.dst_ip),
-            src_port: key.src_port,
-            dst_port: key.dst_port,
-            interval_ms,
-            packets: delta.count,
-            ip_bytes: delta.ip_bytes,
-            payload_bytes: delta.payload_size,
-            tcp_syn: delta.tcp_syn,
-            tcp_synack: delta.tcp_synack,
-            tcp_fin: delta.tcp_fin,
-            tcp_rst: delta.tcp_rst,
-        });
-
-        let attributes = flow_attributes(&key);
-        packet_counter.add(delta.count, &attributes);
-        payload_counter.add(delta.payload_size, &attributes);
-        ip_bytes_counter.add(delta.ip_bytes, &attributes);
-
-        flags_by_direction
-            .entry(key.direction)
-            .or_default()
-            .add_tcp_flags(&delta);
     }
 
     tracker.retain_seen(&seen);
+
+    table_entries.record(seen.len() as u64, &[]);
+    active_flows.record(deltas.len() as u64, &[]);
+    if tracker.note_pressure(deltas.len(), context.capacity) {
+        log::warn!(
+            "{} flows were active in one interval, more than half of the {} entry table: live flows may be evicted and undercounted, consider raising FLOW_TABLE_ENTRIES",
+            deltas.len(),
+            context.capacity
+        );
+    }
+
+    let overflow_packets: u64 = deltas
+        .iter()
+        .filter(|(key, _)| key.flags & KEY_FLAG_AGGREGATED != 0)
+        .map(|(_, delta)| delta.count)
+        .sum();
+    if overflow_packets > 0 {
+        overflow_counter.add(overflow_packets, &[]);
+    }
+    if tracker.note_overflow(overflow_packets > 0) {
+        log::warn!(
+            "New-flow budget exhausted: {overflow_packets} packets in this interval were counted in aggregated flows without ports"
+        );
+    }
+
+    let mut totals_by_group: HashMap<(u8, u8), Totals> = HashMap::new();
+    let mut flags_by_direction: HashMap<u8, Totals> = HashMap::new();
+    for (key, delta) in &deltas {
+        totals_by_group
+            .entry((key.direction, key.protocol))
+            .or_default()
+            .accumulate(delta);
+        flags_by_direction
+            .entry(key.direction)
+            .or_default()
+            .add_tcp_flags(delta);
+    }
+
+    for ((direction, protocol), totals) in &totals_by_group {
+        let attributes = metric_attributes(*direction, *protocol);
+        packet_counter.add(totals.count, &attributes);
+        payload_counter.add(totals.payload_size, &attributes);
+        ip_bytes_counter.add(totals.ip_bytes, &attributes);
+    }
 
     for (direction, totals) in &flags_by_direction {
         for (flag, value) in totals.tcp_flags() {
@@ -190,6 +297,39 @@ pub async fn collect_and_report_metrics(
                 );
             }
         }
+    }
+
+    let reported = deltas.len();
+    let (kept, omitted) = select_top(deltas, context.top_n);
+
+    for (key, delta) in &kept {
+        events.flow(&FlowRecord {
+            direction: key.direction,
+            protocol: key.protocol,
+            src_ip: ipv4_from_network_order(key.src_ip),
+            dst_ip: ipv4_from_network_order(key.dst_ip),
+            src_port: key.src_port,
+            dst_port: key.dst_port,
+            interval_ms: context.interval_ms,
+            packets: delta.count,
+            ip_bytes: delta.ip_bytes,
+            payload_bytes: delta.payload_size,
+            tcp_syn: delta.tcp_syn,
+            tcp_synack: delta.tcp_synack,
+            tcp_fin: delta.tcp_fin,
+            tcp_rst: delta.tcp_rst,
+            aggregated: aggregation_level(key.flags),
+        });
+    }
+
+    if omitted > 0 {
+        omitted_counter.add(omitted as u64, &[]);
+        log::warn!(
+            "Merged {} of {} active flows into aggregated records (FLOW_LOG_TOP_N={})",
+            omitted,
+            reported,
+            context.top_n
+        );
     }
 
     if reported > 0 {
@@ -219,7 +359,7 @@ mod tests {
             dst_port: 443,
             protocol: 6,
             direction: DIRECTION_INGRESS,
-            _padding: 0,
+            flags: 0,
         }
     }
 
@@ -251,25 +391,144 @@ mod tests {
     }
 
     #[test]
-    fn flow_attributes_use_dotted_ipv4_in_wire_order() {
-        let key = PacketKey {
-            src_ip: u32::from_ne_bytes([192, 168, 1, 10]),
-            dst_ip: u32::from_ne_bytes([8, 8, 4, 4]),
-            src_port: 44321,
-            dst_port: 443,
-            protocol: 6,
-            direction: DIRECTION_EGRESS,
-            _padding: 0,
-        };
+    fn metric_attributes_carry_no_addresses_or_ports() {
+        let attributes = metric_attributes(DIRECTION_EGRESS, 17);
 
-        let attributes = flow_attributes(&key);
-
-        assert_eq!(attribute(&attributes, "src_ip"), "192.168.1.10");
-        assert_eq!(attribute(&attributes, "dst_ip"), "8.8.4.4");
-        assert_eq!(attribute(&attributes, "protocol"), "6");
+        assert_eq!(attributes.len(), 2);
         assert_eq!(attribute(&attributes, "direction"), "tx");
-        assert_eq!(attribute(&attributes, "src_port"), "44321");
-        assert_eq!(attribute(&attributes, "dst_port"), "443");
+        assert_eq!(attribute(&attributes, "transport"), "udp");
+    }
+
+    #[test]
+    fn top_flows_are_kept_and_the_rest_is_merged_without_losing_packets() {
+        let deltas: Vec<_> = (1..=5)
+            .map(|port| (key(port), totals(port as u64 * 10, port as u64 * 100)))
+            .collect();
+
+        let (records, merged) = select_top(deltas, 2);
+
+        assert_eq!(merged, 3);
+        assert_eq!(records.len(), 3);
+        assert_eq!(records.iter().map(|(_, t)| t.count).sum::<u64>(), 150);
+        assert_eq!(
+            records.iter().map(|(_, t)| t.payload_size).sum::<u64>(),
+            1500
+        );
+
+        let aggregated: Vec<_> = records
+            .iter()
+            .filter(|(k, _)| k.flags & KEY_FLAG_AGGREGATED != 0)
+            .collect();
+        assert_eq!(aggregated.len(), 1);
+        assert_eq!(aggregated[0].0.src_port, 0);
+        assert_eq!(aggregated[0].1.count, 60);
+    }
+
+    #[test]
+    fn aggregation_levels_follow_the_key_flags() {
+        assert_eq!(aggregation_level(0), 0);
+        assert_eq!(aggregation_level(KEY_FLAG_AGGREGATED), 1);
+        assert_eq!(
+            aggregation_level(KEY_FLAG_AGGREGATED | KEY_FLAG_PORTS_MERGED),
+            2
+        );
+    }
+
+    #[test]
+    fn merged_flows_of_different_host_pairs_stay_separate() {
+        let mut other = key(9);
+        other.dst_ip = 99;
+        let deltas = vec![
+            (key(1), totals(100, 0)),
+            (key(2), totals(3, 0)),
+            (other, totals(4, 0)),
+        ];
+
+        let (records, merged) = select_top(deltas, 1);
+
+        assert_eq!(merged, 2);
+        assert_eq!(records.len(), 3);
+        assert_eq!(records.iter().map(|(_, t)| t.count).sum::<u64>(), 107);
+    }
+
+    #[test]
+    fn merged_flows_join_an_existing_aggregated_record() {
+        let mut aggregated_key = key(0);
+        aggregated_key.src_port = 0;
+        aggregated_key.dst_port = 0;
+        aggregated_key.flags = KEY_FLAG_AGGREGATED | KEY_FLAG_PORTS_MERGED;
+        let deltas = vec![
+            (aggregated_key, totals(1000, 0)),
+            (key(1), totals(5, 0)),
+            (key(2), totals(6, 0)),
+        ];
+
+        let (records, _) = select_top(deltas, 1);
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].1.count, 1011);
+    }
+
+    #[test]
+    fn zero_or_large_limits_keep_every_flow() {
+        let deltas: Vec<_> = (1..=4).map(|port| (key(port), totals(1, 0))).collect();
+        assert_eq!(select_top(deltas.clone(), 0).1, 0);
+        assert_eq!(select_top(deltas.clone(), 0).0.len(), 4);
+        assert_eq!(select_top(deltas, 4).0.len(), 4);
+    }
+
+    #[test]
+    fn pressure_warning_fires_once_per_episode() {
+        let mut tracker = FlowTracker::default();
+
+        assert!(!tracker.note_pressure(400, 1000));
+        assert!(tracker.note_pressure(500, 1000));
+        assert!(!tracker.note_pressure(900, 1000));
+        assert!(!tracker.note_pressure(100, 1000));
+        assert!(tracker.note_pressure(1000, 1000));
+        assert!(!tracker.note_pressure(1, 0));
+    }
+
+    #[test]
+    fn overflow_warning_fires_when_a_burst_starts() {
+        let mut tracker = FlowTracker::default();
+
+        assert!(!tracker.note_overflow(false));
+        assert!(tracker.note_overflow(true));
+        assert!(!tracker.note_overflow(true));
+        assert!(!tracker.note_overflow(false));
+        assert!(tracker.note_overflow(true));
+    }
+
+    #[test]
+    fn totals_accumulate_volumes_and_flags() {
+        let mut sum = Totals::default();
+        sum.accumulate(&Totals {
+            count: 3,
+            payload_size: 30,
+            ip_bytes: 40,
+            tcp_syn: 2,
+            ..Totals::default()
+        });
+        sum.accumulate(&Totals {
+            count: 1,
+            payload_size: 5,
+            ip_bytes: 6,
+            tcp_rst: 1,
+            ..Totals::default()
+        });
+
+        assert_eq!(
+            sum,
+            Totals {
+                count: 4,
+                payload_size: 35,
+                ip_bytes: 46,
+                tcp_syn: 2,
+                tcp_rst: 1,
+                ..Totals::default()
+            }
+        );
     }
 
     #[test]
