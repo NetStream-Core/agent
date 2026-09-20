@@ -14,6 +14,7 @@ struct
     __type(value, struct dns_scratch);
 } dns_scratch_map SEC(".maps");
 
+const volatile __u8  DNS_EVENTS         = 1;
 const volatile __u8  RESPONSE_MODE     = MODE_MONITOR;
 const volatile __u64 QUARANTINE_TTL_NS = 60000000000ULL;
 
@@ -23,7 +24,7 @@ static __always_inline int is_allowlisted(__u32 addr)
     return bpf_map_lookup_elem(&quarantine_allowlist, &key) != NULL;
 }
 
-static __always_inline int handle_dns(void *data, void *data_end, __u32 src_ip)
+static __always_inline int handle_dns(void *data, void *data_end, __u32 src_ip, __u32 dst_ip, __u8 direction)
 {
     void *dns_data = data;
     if (dns_data + DNS_HEADER_SIZE > data_end) { return XDP_PASS; }
@@ -34,6 +35,16 @@ static __always_inline int handle_dns(void *data, void *data_end, __u32 src_ip)
 
     struct dns_suffixes suffixes = {};
     if (dns_suffix_hashes(dns_data + DNS_HEADER_SIZE, data_end, state, &suffixes) < 0) { return XDP_PASS; }
+
+    if (DNS_EVENTS) {
+        state->event.src_ip    = src_ip;
+        state->event.dst_ip    = dst_ip;
+        state->event.direction = direction;
+        if (bpf_ringbuf_output(&dns_queries, &state->event, sizeof(state->event), 0) != 0) {
+            __u64 *lost = bpf_map_lookup_elem(&dns_events_lost, &scratch_key);
+            if (lost) { *lost += 1; }
+        }
+    }
 
     #pragma unroll
     for (int k = 0; k < DNS_SUFFIX_MAX; k++) {

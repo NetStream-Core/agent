@@ -53,6 +53,33 @@ impl MalwareEvent {
     }
 }
 
+pub const DNS_QNAME_CAPACITY: usize = 256;
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct DnsEvent {
+    pub src_ip: u32,
+    pub dst_ip: u32,
+    pub qtype: u16,
+    pub direction: u8,
+    pub qname_len: u8,
+    pub qname: [u8; DNS_QNAME_CAPACITY],
+}
+
+impl DnsEvent {
+    pub fn parse(bytes: &[u8]) -> Option<Self> {
+        bytes
+            .get(..core::mem::size_of::<Self>())
+            .map(bytemuck::pod_read_unaligned)
+    }
+
+    pub fn qname_wire(&self) -> &[u8] {
+        &self.qname[..self.qname_len as usize]
+    }
+}
+
+const _: () = assert!(core::mem::size_of::<DnsEvent>() == 268);
+
 pub const ACTION_OBSERVED: u32 = 0;
 pub const ACTION_DROPPED: u32 = 1;
 pub const ACTION_QUARANTINED: u32 = 2;

@@ -29,7 +29,7 @@ int xdp_monitor(struct xdp_md *ctx)
     debug_printk("rx: proto=%d src=%x dst=%x\n", fc.key.protocol, fc.key.src_ip, fc.key.dst_ip);
 
     if (fc.is_dns) {
-        int result = handle_dns(dns_payload(ip), data_end, fc.key.src_ip);
+        int result = handle_dns(dns_payload(ip), data_end, fc.key.src_ip, fc.key.dst_ip, fc.key.direction);
         if (result != XDP_PASS) { return result; }
     }
 
@@ -52,7 +52,7 @@ int tc_dns_monitor(struct __sk_buff *skb)
     debug_printk("tx: proto=%d src=%x dst=%x\n", fc.key.protocol, fc.key.src_ip, fc.key.dst_ip);
 
     if (fc.is_dns) {
-        int result = handle_dns(dns_payload(ip), data_end, fc.key.src_ip);
+        int result = handle_dns(dns_payload(ip), data_end, fc.key.src_ip, fc.key.dst_ip, fc.key.direction);
         if (result == XDP_DROP) { return TC_ACT_SHOT; }
     }
 

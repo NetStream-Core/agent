@@ -23,6 +23,7 @@ pub struct Settings {
     pub response_mode: ResponseMode,
     pub quarantine_ttl: Duration,
     pub allowlist_extra: Vec<Ipv4Prefix>,
+    pub dns_events: bool,
 }
 
 impl Settings {
@@ -64,6 +65,8 @@ impl Settings {
             None => Vec::new(),
         };
 
+        let dns_events = parse_or(&lookup, "DNS_EVENTS", true)?;
+
         Ok(Self {
             otlp_endpoint,
             report_interval: Duration::from_millis(interval_ms),
@@ -73,6 +76,7 @@ impl Settings {
             response_mode,
             quarantine_ttl: Duration::from_secs(quarantine_ttl_secs),
             allowlist_extra,
+            dns_events,
         })
     }
 }
@@ -115,6 +119,13 @@ mod tests {
         assert_eq!(s.response_mode, ResponseMode::Monitor);
         assert_eq!(s.quarantine_ttl, Duration::from_secs(60));
         assert!(s.allowlist_extra.is_empty());
+        assert!(s.dns_events);
+    }
+
+    #[test]
+    fn dns_events_can_be_disabled() {
+        assert!(!settings(&[("DNS_EVENTS", "false")]).unwrap().dns_events);
+        assert!(settings(&[("DNS_EVENTS", "maybe")]).is_err());
     }
 
     #[test]
