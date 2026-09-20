@@ -9,6 +9,7 @@ use tokio::time::interval;
 
 use super::features::{SubdomainTracker, decode_qname, features, qtype_label};
 use crate::bpf::direction_label;
+use crate::telemetry::logs::{DnsRecord, EventLog};
 
 const SUBDOMAIN_WINDOW: Duration = Duration::from_secs(60);
 const MAX_TRACKED_DOMAINS: usize = 4096;
@@ -21,7 +22,11 @@ fn lost_total(lost: &PerCpuArray<MapData, u64>) -> u64 {
         .unwrap_or(0)
 }
 
-pub fn spawn_dns_monitor(ring_buf: RingBuf<MapData>, lost: PerCpuArray<MapData, u64>) {
+pub fn spawn_dns_monitor(
+    ring_buf: RingBuf<MapData>,
+    lost: PerCpuArray<MapData, u64>,
+    events: EventLog,
+) {
     tokio::spawn(async move {
         let meter = global::meter("netstream_agent");
         let queries = meter
@@ -112,6 +117,16 @@ pub fn spawn_dns_monitor(ring_buf: RingBuf<MapData>, lost: PerCpuArray<MapData, 
                         length.record(f.length as u64, &attributes);
                         entropy.record(f.entropy, &attributes);
                         unique.record(unique_subdomains as u64, &attributes);
+
+                        events.dns_query(&DnsRecord {
+                            direction: event.direction,
+                            src_ip: Ipv4Addr::from(u32::from_be(event.src_ip)),
+                            dst_ip: Ipv4Addr::from(u32::from_be(event.dst_ip)),
+                            qtype,
+                            name: &name,
+                            features: &f,
+                            unique_subdomains,
+                        });
 
                         debug!(
                             "dns query dir={} src={} dst={} qtype={} name={} len={} labels={} longest={} entropy={:.3} digits={:.3} unique_subdomains={}",

@@ -24,6 +24,8 @@ pub struct Settings {
     pub quarantine_ttl: Duration,
     pub allowlist_extra: Vec<Ipv4Prefix>,
     pub dns_events: bool,
+    pub export_logs: bool,
+    pub host_id: Option<String>,
 }
 
 impl Settings {
@@ -66,6 +68,8 @@ impl Settings {
         };
 
         let dns_events = parse_or(&lookup, "DNS_EVENTS", true)?;
+        let export_logs = parse_or(&lookup, "EXPORT_LOGS", true)?;
+        let host_id = lookup("HOST_ID");
 
         Ok(Self {
             otlp_endpoint,
@@ -77,6 +81,8 @@ impl Settings {
             quarantine_ttl: Duration::from_secs(quarantine_ttl_secs),
             allowlist_extra,
             dns_events,
+            export_logs,
+            host_id,
         })
     }
 }
@@ -120,6 +126,16 @@ mod tests {
         assert_eq!(s.quarantine_ttl, Duration::from_secs(60));
         assert!(s.allowlist_extra.is_empty());
         assert!(s.dns_events);
+        assert!(s.export_logs);
+        assert_eq!(s.host_id, None);
+    }
+
+    #[test]
+    fn log_export_and_host_id_are_configurable() {
+        let s = settings(&[("EXPORT_LOGS", "false"), ("HOST_ID", "sensor-7")]).unwrap();
+        assert!(!s.export_logs);
+        assert_eq!(s.host_id.as_deref(), Some("sensor-7"));
+        assert!(settings(&[("EXPORT_LOGS", "sometimes")]).is_err());
     }
 
     #[test]

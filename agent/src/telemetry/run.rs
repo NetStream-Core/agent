@@ -8,7 +8,7 @@ use log::{info, warn};
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook_tokio::Signals;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::time::interval;
 
 use opentelemetry::global;
@@ -22,19 +22,15 @@ use crate::config::Settings;
 use crate::dns::monitor::spawn_dns_monitor;
 use crate::health;
 use crate::response::ResponseConfig;
+use crate::telemetry::logs::{EventLog, LogPipeline, init_otlp_logs};
+use crate::telemetry::resource;
+use crate::utils::get_default_interface;
 
-fn init_otlp_metrics(endpoint: &str) -> Result<SdkMeterProvider> {
-    let resource = Resource::builder()
-        .with_attributes(vec![opentelemetry::KeyValue::new(
-            "service.name",
-            "netstream-monitor-agent",
-        )])
-        .build();
-
+fn init_otlp_metrics(endpoint: &str, resource: Resource) -> Result<SdkMeterProvider> {
     let exporter = MetricExporter::builder()
         .with_tonic()
         .with_endpoint(endpoint.to_string())
-        .with_timeout(Duration::from_secs(5))
+        .with_timeout(Duration::from_secs(2))
         .build()?;
 
     let reader = PeriodicReader::builder(exporter)
@@ -84,7 +80,19 @@ pub async fn run(settings: &Settings) -> Result<()> {
     let hashes = domain_mgr_raw.load_from_file(path)?;
     let domain_mgr = Arc::new(domain_mgr_raw);
 
-    let meter_provider = init_otlp_metrics(&settings.otlp_endpoint)?;
+    let interface = get_default_interface()?;
+    let resource = resource::build(settings.host_id.clone(), &interface);
+
+    let meter_provider = init_otlp_metrics(&settings.otlp_endpoint, resource.clone())?;
+    let log_pipeline: Option<LogPipeline> = if settings.export_logs {
+        Some(init_otlp_logs(&settings.otlp_endpoint, resource)?)
+    } else {
+        None
+    };
+    let events = log_pipeline
+        .as_ref()
+        .map(|pipeline| pipeline.events.clone())
+        .unwrap_or_else(EventLog::disabled);
     info!(
         "OpenTelemetry OTLP pipeline initialized targeting {}",
         settings.otlp_endpoint
@@ -96,6 +104,7 @@ pub async fn run(settings: &Settings) -> Result<()> {
         &hashes,
         &response,
         settings.dns_events,
+        &interface,
     )
     .await?;
     let bpf_shared = loaded.bpf;
@@ -104,15 +113,20 @@ pub async fn run(settings: &Settings) -> Result<()> {
     let tc_link_id = loaded.tc_link_id;
     let mut flow_tracker = FlowTracker::default();
 
-    spawn_event_monitor(loaded.malware_events, Arc::clone(&domain_mgr));
+    spawn_event_monitor(
+        loaded.malware_events,
+        Arc::clone(&domain_mgr),
+        events.clone(),
+    );
     if settings.dns_events {
-        spawn_dns_monitor(loaded.dns_queries, loaded.dns_events_lost);
+        spawn_dns_monitor(loaded.dns_queries, loaded.dns_events_lost, events.clone());
     }
 
     health::mark_ready();
     info!("Agent is ready");
 
     let mut tick = interval(settings.report_interval);
+    let mut last_collect = Instant::now();
 
     loop {
         tokio::select! {
@@ -125,7 +139,9 @@ pub async fn run(settings: &Settings) -> Result<()> {
             }
 
             _ = tick.tick() => {
-                if let Err(e) = collect_and_report_metrics(&packet_counts, &mut flow_tracker).await {
+                let interval_ms = last_collect.elapsed().as_millis() as u64;
+                last_collect = Instant::now();
+                if let Err(e) = collect_and_report_metrics(&packet_counts, &mut flow_tracker, &events, interval_ms).await {
                     warn!("Failed to process eBPF maps: {e}");
                 }
             }
@@ -145,6 +161,10 @@ pub async fn run(settings: &Settings) -> Result<()> {
             Ok(()) => info!("Detached TC egress program"),
             Err(e) => warn!("Failed to detach TC egress program: {e}"),
         }
+    }
+
+    if let Some(pipeline) = &log_pipeline {
+        pipeline.shutdown();
     }
 
     if let Err(e) = meter_provider.shutdown() {
