@@ -41,8 +41,26 @@ const _: () = assert!(core::mem::size_of::<PacketValue>() == 64);
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct MalwareEvent {
     pub src_ip: u32,
-    pub _padding: u32,
+    pub action: u32,
     pub domain_hash: u64,
 }
+
+impl MalwareEvent {
+    pub fn parse(bytes: &[u8]) -> Option<Self> {
+        bytes
+            .get(..core::mem::size_of::<Self>())
+            .map(bytemuck::pod_read_unaligned)
+    }
+}
+
+pub const ACTION_OBSERVED: u32 = 0;
+pub const ACTION_DROPPED: u32 = 1;
+pub const ACTION_QUARANTINED: u32 = 2;
+
+pub const MODE_MONITOR: u8 = 0;
+pub const MODE_ENFORCE: u8 = 1;
+pub const MODE_GATEWAY: u8 = 2;
+
+const _: () = assert!(core::mem::size_of::<MalwareEvent>() == 16);
 
 unsafe impl Pod for MalwareEvent {}

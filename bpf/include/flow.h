@@ -45,8 +45,12 @@ static __always_inline struct iphdr *locate_ip(void *data, void *data_end)
 
 static __always_inline int is_blocked(__u32 addr)
 {
-    __u8 *blocked = bpf_map_lookup_elem(&blocked_ips, &addr);
-    return blocked && *blocked == 1;
+    struct block_entry *entry = bpf_map_lookup_elem(&blocked_ips, &addr);
+    if (!entry) { return 0; }
+    if (entry->expires_ns > bpf_ktime_get_ns()) { return 1; }
+
+    bpf_map_delete_elem(&blocked_ips, &addr);
+    return 0;
 }
 
 static __always_inline void *dns_payload(struct iphdr *ip)

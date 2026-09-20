@@ -3,7 +3,10 @@ use aya::programs::tc::SchedClassifierLinkId;
 use aya::programs::xdp::XdpLinkId;
 use aya::{
     Ebpf, EbpfLoader,
-    maps::{HashMap, PerCpuHashMap, RingBuf},
+    maps::{
+        HashMap, PerCpuHashMap, RingBuf,
+        lpm_trie::{Key, LpmTrie},
+    },
     programs::{SchedClassifier, TcAttachType, Xdp, XdpFlags, tc},
 };
 use log::info;
@@ -11,6 +14,7 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use crate::response::ResponseConfig;
 use crate::utils::get_default_interface;
 use common::{PacketKey, PacketValue};
 
@@ -26,6 +30,7 @@ fn is_l3_interface(iface: &str) -> bool {
 pub async fn setup(
     bpf_object: &Path,
     hashes: &[u64],
+    response: &ResponseConfig,
 ) -> Result<(
     Arc<Mutex<Ebpf>>,
     Arc<Mutex<PerCpuHashMap<aya::maps::MapData, PacketKey, PacketValue>>>,
@@ -52,6 +57,12 @@ pub async fn setup(
 
     let mut bpf = EbpfLoader::new()
         .set_global("IS_L3_INTERFACE", &(is_l3 as u8), true)
+        .set_global("RESPONSE_MODE", &response.mode.as_kernel_value(), true)
+        .set_global(
+            "QUARANTINE_TTL_NS",
+            &(response.quarantine_ttl.as_nanos() as u64),
+            true,
+        )
         .load_file(bpf_object)?;
 
     let program = bpf
@@ -89,6 +100,22 @@ pub async fn setup(
             let _ = malware_map.insert(hash, 1, 0);
         }
         info!("BPF: loaded {} malware hashes", hashes.len());
+    }
+
+    {
+        let map = bpf
+            .map_mut("quarantine_allowlist")
+            .ok_or_else(|| anyhow!("Map 'quarantine_allowlist' not found"))?;
+        let mut allowlist: LpmTrie<_, u32, u8> = LpmTrie::try_from(map)?;
+        for prefix in &response.allowlist {
+            let key = Key::new(prefix.len as u32, u32::from_ne_bytes(prefix.addr.octets()));
+            allowlist.insert(&key, 1, 0)?;
+        }
+        info!(
+            "Response mode: {}; quarantine allowlist has {} entries",
+            response.mode,
+            response.allowlist.len()
+        );
     }
 
     let ring_buf = {

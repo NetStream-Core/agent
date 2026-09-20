@@ -5,11 +5,13 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use super::paths;
+use crate::response::{Ipv4Prefix, ResponseMode, parse_prefix_list};
 
 const DEFAULT_OTLP_ENDPOINT: &str = "http://127.0.0.1:4317";
 const DEFAULT_REPORT_INTERVAL_MS: u64 = 1000;
 const DEFAULT_HEALTH_HOST: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 const DEFAULT_HEALTH_PORT: u16 = 8081;
+const DEFAULT_QUARANTINE_TTL_SECS: u64 = 60;
 
 #[derive(Debug, Clone)]
 pub struct Settings {
@@ -18,6 +20,9 @@ pub struct Settings {
     pub health_addr: SocketAddr,
     pub malware_domains_file: PathBuf,
     pub bpf_object_file: PathBuf,
+    pub response_mode: ResponseMode,
+    pub quarantine_ttl: Duration,
+    pub allowlist_extra: Vec<Ipv4Prefix>,
 }
 
 impl Settings {
@@ -44,12 +49,30 @@ impl Settings {
             .map(PathBuf::from)
             .unwrap_or_else(paths::bpf_object);
 
+        let response_mode = parse_or(&lookup, "RESPONSE_MODE", ResponseMode::Monitor)?;
+
+        let quarantine_ttl_secs =
+            parse_or(&lookup, "QUARANTINE_TTL_SECS", DEFAULT_QUARANTINE_TTL_SECS)?;
+        if quarantine_ttl_secs == 0 {
+            return Err(anyhow!("QUARANTINE_TTL_SECS must be greater than zero"));
+        }
+
+        let allowlist_extra = match lookup("QUARANTINE_ALLOWLIST") {
+            Some(raw) => {
+                parse_prefix_list(&raw).context("invalid value for QUARANTINE_ALLOWLIST")?
+            }
+            None => Vec::new(),
+        };
+
         Ok(Self {
             otlp_endpoint,
             report_interval: Duration::from_millis(interval_ms),
             health_addr: SocketAddr::new(health_host, health_port),
             malware_domains_file,
             bpf_object_file,
+            response_mode,
+            quarantine_ttl: Duration::from_secs(quarantine_ttl_secs),
+            allowlist_extra,
         })
     }
 }
@@ -89,6 +112,30 @@ mod tests {
         assert_eq!(s.health_addr, "127.0.0.1:8081".parse().unwrap());
         assert_eq!(s.malware_domains_file, paths::malware_domains());
         assert_eq!(s.bpf_object_file, paths::bpf_object());
+        assert_eq!(s.response_mode, ResponseMode::Monitor);
+        assert_eq!(s.quarantine_ttl, Duration::from_secs(60));
+        assert!(s.allowlist_extra.is_empty());
+    }
+
+    #[test]
+    fn response_settings_are_read_from_environment() {
+        let s = settings(&[
+            ("RESPONSE_MODE", "gateway"),
+            ("QUARANTINE_TTL_SECS", "5"),
+            ("QUARANTINE_ALLOWLIST", "10.0.0.1, 192.168.0.0/16"),
+        ])
+        .expect("response settings");
+
+        assert_eq!(s.response_mode, ResponseMode::Gateway);
+        assert_eq!(s.quarantine_ttl, Duration::from_secs(5));
+        assert_eq!(s.allowlist_extra.len(), 2);
+    }
+
+    #[test]
+    fn invalid_response_settings_are_rejected() {
+        assert!(settings(&[("RESPONSE_MODE", "block")]).is_err());
+        assert!(settings(&[("QUARANTINE_TTL_SECS", "0")]).is_err());
+        assert!(settings(&[("QUARANTINE_ALLOWLIST", "10.0.0.1,nope")]).is_err());
     }
 
     #[test]

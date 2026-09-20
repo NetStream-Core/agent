@@ -28,9 +28,21 @@ _Static_assert(sizeof(struct packet_value) == 64, "packet_value layout is shared
 
 struct malware_event_t {
     __u32 src_ip;
-    __u32 _padding;
+    __u32 action;
     __u64 domain_hash;
 };
+
+struct block_entry {
+    __u64 expires_ns;
+    __u64 domain_hash;
+};
+
+struct allowlist_key {
+    __u32 prefixlen;
+    __u32 addr;
+};
+
+_Static_assert(sizeof(struct malware_event_t) == 16, "malware_event_t layout is shared with the agent");
 
 struct
 {
@@ -50,11 +62,20 @@ struct
 
 struct
 {
-    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __type(key, __u32);
-    __type(value, __u8);
+    __type(value, struct block_entry);
     __uint(max_entries, 4096);
 } blocked_ips SEC(".maps");
+
+struct
+{
+    __uint(type, BPF_MAP_TYPE_LPM_TRIE);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
+    __type(key, struct allowlist_key);
+    __type(value, __u8);
+    __uint(max_entries, 256);
+} quarantine_allowlist SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_RINGBUF);
