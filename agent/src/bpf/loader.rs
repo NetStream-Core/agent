@@ -36,13 +36,23 @@ pub struct Loaded {
     pub tc_link_id: SchedClassifierLinkId,
 }
 
+pub struct LoadOptions<'a> {
+    pub bpf_object: &'a Path,
+    pub interface: &'a str,
+    pub dns_events: bool,
+    pub flow_table_entries: u32,
+    pub new_flows_per_second: u32,
+    pub collapse_ephemeral_ports: bool,
+    pub ephemeral_range: (u16, u16),
+}
+
 pub async fn setup(
-    bpf_object: &Path,
+    options: &LoadOptions<'_>,
     hashes: &[u64],
     response: &ResponseConfig,
-    dns_events: bool,
-    interface: &str,
 ) -> Result<Loaded> {
+    let bpf_object = options.bpf_object;
+    let interface = options.interface;
     info!("Using network interface: {}", interface);
 
     let is_l3 = is_l3_interface(interface);
@@ -59,9 +69,37 @@ pub async fn setup(
         return Err(anyhow!("eBPF file not found: {}", bpf_object.display()));
     }
 
+    let (ephemeral_min, ephemeral_max) = options.ephemeral_range;
+    info!(
+        "Flow table: {} entries; ephemeral ports {}-{} are {}",
+        options.flow_table_entries,
+        ephemeral_min,
+        ephemeral_max,
+        if options.collapse_ephemeral_ports {
+            "collapsed"
+        } else {
+            "kept"
+        }
+    );
+
+    let new_flow_budget = (options.new_flows_per_second / 10).max(1);
+    info!(
+        "New flows admitted per CPU: {} per second, the rest is aggregated per host pair",
+        options.new_flows_per_second
+    );
+
     let mut bpf = EbpfLoader::new()
+        .set_max_entries("packet_counts", options.flow_table_entries)
+        .set_global("NEW_FLOW_BUDGET", &new_flow_budget, true)
         .set_global("IS_L3_INTERFACE", &(is_l3 as u8), true)
-        .set_global("DNS_EVENTS", &(dns_events as u8), true)
+        .set_global(
+            "COLLAPSE_EPHEMERAL",
+            &(options.collapse_ephemeral_ports as u8),
+            true,
+        )
+        .set_global("EPHEMERAL_MIN", &ephemeral_min, true)
+        .set_global("EPHEMERAL_MAX", &ephemeral_max, true)
+        .set_global("DNS_EVENTS", &(options.dns_events as u8), true)
         .set_global("RESPONSE_MODE", &response.mode.as_kernel_value(), true)
         .set_global(
             "QUARANTINE_TTL_NS",

@@ -17,14 +17,17 @@ use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
 
 use opentelemetry_otlp::{MetricExporter, WithExportConfig};
 
-use crate::bpf::{FlowTracker, collect_and_report_metrics, setup, spawn_event_monitor};
+use crate::bpf::{
+    CollectContext, FlowTracker, LoadOptions, collect_and_report_metrics, setup,
+    spawn_event_monitor,
+};
 use crate::config::Settings;
 use crate::dns::monitor::spawn_dns_monitor;
 use crate::health;
 use crate::response::ResponseConfig;
 use crate::telemetry::logs::{EventLog, LogPipeline, init_otlp_logs};
 use crate::telemetry::resource;
-use crate::utils::get_default_interface;
+use crate::utils::{ephemeral_port_range, get_default_interface};
 
 fn init_otlp_metrics(endpoint: &str, resource: Resource) -> Result<SdkMeterProvider> {
     let exporter = MetricExporter::builder()
@@ -65,6 +68,11 @@ fn detach_tc(bpf: &mut Ebpf, link_id: SchedClassifierLinkId) -> Result<()> {
 }
 
 pub async fn run(settings: &Settings) -> Result<()> {
+    let collect_context = |interval_ms: u64| CollectContext {
+        interval_ms,
+        top_n: settings.flow_log_top_n,
+        capacity: settings.flow_table_entries as usize,
+    };
     let mut signals = Signals::new([SIGINT, SIGTERM])?.fuse();
 
     let mut domain_mgr_raw = crate::domain_manager::DomainManager::new();
@@ -100,11 +108,17 @@ pub async fn run(settings: &Settings) -> Result<()> {
 
     let response = ResponseConfig::from_settings(settings);
     let loaded = setup(
-        &settings.bpf_object_file,
+        &LoadOptions {
+            bpf_object: &settings.bpf_object_file,
+            interface: &interface,
+            dns_events: settings.dns_events,
+            flow_table_entries: settings.flow_table_entries,
+            new_flows_per_second: settings.new_flows_per_second,
+            collapse_ephemeral_ports: settings.collapse_ephemeral_ports,
+            ephemeral_range: ephemeral_port_range(),
+        },
         &hashes,
         &response,
-        settings.dns_events,
-        &interface,
     )
     .await?;
     let bpf_shared = loaded.bpf;
@@ -141,7 +155,7 @@ pub async fn run(settings: &Settings) -> Result<()> {
             _ = tick.tick() => {
                 let interval_ms = last_collect.elapsed().as_millis() as u64;
                 last_collect = Instant::now();
-                if let Err(e) = collect_and_report_metrics(&packet_counts, &mut flow_tracker, &events, interval_ms).await {
+                if let Err(e) = collect_and_report_metrics(&packet_counts, &mut flow_tracker, &events, &collect_context(interval_ms)).await {
                     warn!("Failed to process eBPF maps: {e}");
                 }
             }

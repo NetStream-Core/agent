@@ -11,8 +11,11 @@ pub struct PacketKey {
     pub dst_port: u16,
     pub protocol: u8,
     pub direction: u8,
-    pub _padding: u16,
+    pub flags: u16,
 }
+
+pub const KEY_FLAG_AGGREGATED: u16 = 1;
+pub const KEY_FLAG_PORTS_MERGED: u16 = 2;
 
 pub const DIRECTION_INGRESS: u8 = 0;
 pub const DIRECTION_EGRESS: u8 = 1;

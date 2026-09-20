@@ -32,6 +32,7 @@ pub struct FlowRecord {
     pub tcp_synack: u64,
     pub tcp_fin: u64,
     pub tcp_rst: u64,
+    pub aggregated: u8,
 }
 
 pub struct DnsRecord<'a> {
@@ -94,6 +95,7 @@ pub fn flow_attributes(r: &FlowRecord) -> Attributes {
         ("netstream.flow.tcp.synack", int(r.tcp_synack)),
         ("netstream.flow.tcp.fin", int(r.tcp_fin)),
         ("netstream.flow.tcp.rst", int(r.tcp_rst)),
+        ("netstream.flow.aggregated", int(r.aggregated.into())),
     ]
 }
 
@@ -253,6 +255,7 @@ mod tests {
             tcp_synack: 0,
             tcp_fin: 2,
             tcp_rst: 1,
+            aggregated: 0,
         }
     }
 
@@ -271,7 +274,7 @@ mod tests {
     fn flow_attributes_follow_the_contract() {
         let a = as_map(flow_attributes(&flow()));
 
-        assert_eq!(a.len(), 14);
+        assert_eq!(a.len(), 15);
         assert_eq!(string(&a["network.io.direction"]), "receive");
         assert_eq!(string(&a["network.transport"]), "tcp");
         assert_eq!(string(&a["source.address"]), "10.1.2.3");
@@ -286,6 +289,19 @@ mod tests {
         assert_eq!(int_of(&a["netstream.flow.tcp.synack"]), 0);
         assert_eq!(int_of(&a["netstream.flow.tcp.fin"]), 2);
         assert_eq!(int_of(&a["netstream.flow.tcp.rst"]), 1);
+        assert_eq!(int_of(&a["netstream.flow.aggregated"]), 0);
+    }
+
+    #[test]
+    fn aggregated_flows_carry_their_aggregation_level() {
+        for level in [1u8, 2] {
+            let mut record = flow();
+            record.aggregated = level;
+            assert_eq!(
+                int_of(&as_map(flow_attributes(&record))["netstream.flow.aggregated"]),
+                level as i64
+            );
+        }
     }
 
     #[test]
@@ -368,7 +384,7 @@ mod tests {
         assert_eq!(flow_log.record.event_name(), Some(EVENT_FLOW));
         assert_eq!(flow_log.record.severity_number(), Some(Severity::Info));
         assert!(flow_log.record.timestamp().is_some());
-        assert_eq!(flow_log.record.attributes_iter().count(), 14);
+        assert_eq!(flow_log.record.attributes_iter().count(), 15);
         assert_eq!(
             flow_log
                 .resource

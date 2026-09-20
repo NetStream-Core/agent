@@ -1,6 +1,8 @@
 #ifndef __STRUCTS_H__
 #define __STRUCTS_H__
 
+#include "budget.h"
+
 struct packet_key
 {
     __u32 src_ip;
@@ -9,7 +11,7 @@ struct packet_key
     __u16 dst_port;
     __u8  protocol;
     __u8  direction;
-    __u16 _padding;
+    __u16 flags;
 };
 
 struct packet_value {
@@ -51,6 +53,14 @@ struct
     __type(value, struct packet_value);
     __uint(max_entries, 10240);
 } packet_counts SEC(".maps");
+
+struct
+{
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, struct budget_state);
+} flow_budget SEC(".maps");
 
 struct
 {
