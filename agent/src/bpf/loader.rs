@@ -15,7 +15,6 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::response::ResponseConfig;
-use crate::utils::get_default_interface;
 use common::{PacketKey, PacketValue};
 
 fn is_l3_interface(iface: &str) -> bool {
@@ -42,11 +41,11 @@ pub async fn setup(
     hashes: &[u64],
     response: &ResponseConfig,
     dns_events: bool,
+    interface: &str,
 ) -> Result<Loaded> {
-    let interface = get_default_interface()?;
     info!("Using network interface: {}", interface);
 
-    let is_l3 = is_l3_interface(&interface);
+    let is_l3 = is_l3_interface(interface);
     info!(
         "Interface link type: {}",
         if is_l3 {
@@ -77,11 +76,11 @@ pub async fn setup(
     let xdp: &mut Xdp = program.try_into()?;
 
     xdp.load()?;
-    let link_id: XdpLinkId = xdp.attach(&interface, XdpFlags::default())?;
+    let link_id: XdpLinkId = xdp.attach(interface, XdpFlags::default())?;
 
     info!("eBPF program attached to {}", interface);
 
-    match tc::qdisc_add_clsact(&interface) {
+    match tc::qdisc_add_clsact(interface) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
         Err(e) => return Err(anyhow!("Failed to add clsact qdisc on {interface}: {e}")),
@@ -93,7 +92,7 @@ pub async fn setup(
     let tc_prog: &mut SchedClassifier = tc_program.try_into()?;
 
     tc_prog.load()?;
-    let tc_link_id: SchedClassifierLinkId = tc_prog.attach(&interface, TcAttachType::Egress)?;
+    let tc_link_id: SchedClassifierLinkId = tc_prog.attach(interface, TcAttachType::Egress)?;
 
     info!("TC egress program attached to {}", interface);
 

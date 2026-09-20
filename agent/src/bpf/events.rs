@@ -6,8 +6,9 @@ use std::{net::Ipv4Addr, sync::Arc};
 use tokio::io::{Interest, unix::AsyncFd};
 
 use crate::domain_manager::DomainManager;
+use crate::telemetry::logs::{EventLog, HitRecord};
 
-fn action_label(action: u32) -> &'static str {
+pub fn action_label(action: u32) -> &'static str {
     match action {
         ACTION_OBSERVED => "observed",
         ACTION_DROPPED => "dropped",
@@ -16,7 +17,11 @@ fn action_label(action: u32) -> &'static str {
     }
 }
 
-pub fn spawn_event_monitor(ring_buf: RingBuf<MapData>, domain_mgr: Arc<DomainManager>) {
+pub fn spawn_event_monitor(
+    ring_buf: RingBuf<MapData>,
+    domain_mgr: Arc<DomainManager>,
+    events: EventLog,
+) {
     tokio::spawn(async move {
         let hits = global::meter("netstream_agent")
             .u64_counter("netstream_blocklist_hits_total")
@@ -49,6 +54,16 @@ pub fn spawn_event_monitor(ring_buf: RingBuf<MapData>, domain_mgr: Arc<DomainMan
                 let src_ip = Ipv4Addr::from(u32::from_be(event.src_ip));
                 let action = action_label(event.action);
                 hits.add(1, &[KeyValue::new("action", action)]);
+
+                let domain = domain_mgr
+                    .get_domain_name(event.domain_hash)
+                    .cloned()
+                    .unwrap_or_else(|| format!("0x{:x}", event.domain_hash));
+                events.blocklist_hit(&HitRecord {
+                    src_ip,
+                    domain,
+                    action,
+                });
 
                 if let Some(domain) = domain_mgr.get_domain_name(event.domain_hash) {
                     info!(

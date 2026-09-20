@@ -7,6 +7,8 @@ use std::collections::{HashMap, HashSet};
 use std::{net::Ipv4Addr, sync::Arc};
 use tokio::sync::Mutex;
 
+use crate::telemetry::logs::{EventLog, FlowRecord};
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct Totals {
     count: u64,
@@ -105,6 +107,8 @@ fn flow_attributes(key: &PacketKey) -> [KeyValue; 6] {
 pub async fn collect_and_report_metrics(
     packet_counts: &Arc<Mutex<PerCpuHashMap<MapData, PacketKey, PacketValue>>>,
     tracker: &mut FlowTracker,
+    events: &EventLog,
+    interval_ms: u64,
 ) -> Result<usize> {
     let meter = global::meter("netstream_agent");
 
@@ -143,6 +147,23 @@ pub async fn collect_and_report_metrics(
             continue;
         }
         reported += 1;
+
+        events.flow(&FlowRecord {
+            direction: key.direction,
+            protocol: key.protocol,
+            src_ip: ipv4_from_network_order(key.src_ip),
+            dst_ip: ipv4_from_network_order(key.dst_ip),
+            src_port: key.src_port,
+            dst_port: key.dst_port,
+            interval_ms,
+            packets: delta.count,
+            ip_bytes: delta.ip_bytes,
+            payload_bytes: delta.payload_size,
+            tcp_syn: delta.tcp_syn,
+            tcp_synack: delta.tcp_synack,
+            tcp_fin: delta.tcp_fin,
+            tcp_rst: delta.tcp_rst,
+        });
 
         let attributes = flow_attributes(&key);
         packet_counter.add(delta.count, &attributes);

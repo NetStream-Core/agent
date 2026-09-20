@@ -19,8 +19,9 @@ futures-util = "0.3"
 axum = { version = "0.8.9", features = ["http1"] }
 serde = { version = "1.0.228", features = ["derive"] }
 opentelemetry = { version = "0.32.0", features = ["metrics"] }
-opentelemetry_sdk = { version = "0.32.1", features = ["rt-tokio", "metrics"] }
-opentelemetry-otlp = { version = "0.32.0", features = ["metrics", "grpc-tonic"] }
+opentelemetry_sdk = { version = "0.32.1", features = ["rt-tokio", "metrics", "logs"] }
+opentelemetry-otlp = { version = "0.32.0", features = ["metrics", "logs", "grpc-tonic"] }
 
 [dev-dependencies]
 tempfile = "3"
+opentelemetry_sdk = { version = "0.32.1", features = ["testing"] }
