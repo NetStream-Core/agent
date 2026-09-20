@@ -83,7 +83,7 @@ fn ipv4_from_network_order(raw: u32) -> Ipv4Addr {
     Ipv4Addr::from(u32::from_be(raw))
 }
 
-fn direction_label(direction: u8) -> &'static str {
+pub fn direction_label(direction: u8) -> &'static str {
     match direction {
         DIRECTION_INGRESS => "rx",
         DIRECTION_EGRESS => "tx",

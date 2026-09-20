@@ -82,4 +82,17 @@ struct {
     __uint(max_entries, 256 * 4096);
 } events SEC(".maps");
 
+struct {
+    __uint(type, BPF_MAP_TYPE_RINGBUF);
+    __uint(max_entries, 256 * 4096);
+} dns_queries SEC(".maps");
+
+struct
+{
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, __u64);
+} dns_events_lost SEC(".maps");
+
 #endif /* __STRUCTS_H__ */

@@ -14,6 +14,18 @@
 
 #define DNS_BARRIER() __asm__ __volatile__("" ::: "memory")
 
+struct dns_event
+{
+    __u32 src_ip;
+    __u32 dst_ip;
+    __u16 qtype;
+    __u8  direction;
+    __u8  qname_len;
+    __u8  qname[DNS_NAME_MAX_LENGTH + 1];
+};
+
+_Static_assert(sizeof(struct dns_event) == 268, "dns_event layout is shared with the agent");
+
 struct dns_suffixes
 {
     __u64 hashes[DNS_SUFFIX_MAX];
@@ -29,6 +41,7 @@ struct dns_scratch
     __u32 remaining;
     __u32 label_count;
     __u32 _padding;
+    struct dns_event event;
 };
 
 static __always_inline __u64 dns_hash_pow(__u32 exponent)
@@ -63,10 +76,12 @@ static __always_inline __u8 dns_lower(__u8 c)
 static __always_inline int dns_suffix_hashes(const __u8 *name, const __u8 *end, struct dns_scratch *st,
                                              struct dns_suffixes *out)
 {
-    st->label_count  = 0;
-    st->remaining    = 0;
-    st->current_hash = 0;
-    st->current_len  = 0;
+    st->label_count     = 0;
+    st->remaining       = 0;
+    st->current_hash    = 0;
+    st->current_len     = 0;
+    st->event.qtype     = 0;
+    st->event.qname_len = 0;
 
     int terminated = 0;
 
@@ -74,6 +89,7 @@ static __always_inline int dns_suffix_hashes(const __u8 *name, const __u8 *end, 
         DNS_BARRIER();
         if (name + i + 1 > end) { return -1; }
         __u8 byte = name[i];
+        st->event.qname[i] = byte;
 
         if (st->remaining == 0) {
             if (st->current_len > 0) {
@@ -89,7 +105,9 @@ static __always_inline int dns_suffix_hashes(const __u8 *name, const __u8 *end, 
                 st->current_len  = 0;
             }
             if (byte == 0) {
-                terminated = 1;
+                terminated          = 1;
+                st->event.qname_len = i;
+                if (name + i + 3 <= end) { st->event.qtype = (name[i + 1] << 8) | name[i + 2]; }
                 break;
             }
             if (byte > DNS_LABEL_MAX_LENGTH) { return -1; }

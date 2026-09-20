@@ -4,7 +4,7 @@ use aya::programs::xdp::XdpLinkId;
 use aya::{
     Ebpf, EbpfLoader,
     maps::{
-        HashMap, PerCpuHashMap, RingBuf,
+        HashMap, MapData, PerCpuArray, PerCpuHashMap, RingBuf,
         lpm_trie::{Key, LpmTrie},
     },
     programs::{SchedClassifier, TcAttachType, Xdp, XdpFlags, tc},
@@ -27,17 +27,22 @@ fn is_l3_interface(iface: &str) -> bool {
         .unwrap_or(false)
 }
 
+pub struct Loaded {
+    pub bpf: Arc<Mutex<Ebpf>>,
+    pub packet_counts: Arc<Mutex<PerCpuHashMap<MapData, PacketKey, PacketValue>>>,
+    pub malware_events: RingBuf<MapData>,
+    pub dns_queries: RingBuf<MapData>,
+    pub dns_events_lost: PerCpuArray<MapData, u64>,
+    pub xdp_link_id: XdpLinkId,
+    pub tc_link_id: SchedClassifierLinkId,
+}
+
 pub async fn setup(
     bpf_object: &Path,
     hashes: &[u64],
     response: &ResponseConfig,
-) -> Result<(
-    Arc<Mutex<Ebpf>>,
-    Arc<Mutex<PerCpuHashMap<aya::maps::MapData, PacketKey, PacketValue>>>,
-    RingBuf<aya::maps::MapData>,
-    XdpLinkId,
-    SchedClassifierLinkId,
-)> {
+    dns_events: bool,
+) -> Result<Loaded> {
     let interface = get_default_interface()?;
     info!("Using network interface: {}", interface);
 
@@ -57,6 +62,7 @@ pub async fn setup(
 
     let mut bpf = EbpfLoader::new()
         .set_global("IS_L3_INTERFACE", &(is_l3 as u8), true)
+        .set_global("DNS_EVENTS", &(dns_events as u8), true)
         .set_global("RESPONSE_MODE", &response.mode.as_kernel_value(), true)
         .set_global(
             "QUARANTINE_TTL_NS",
@@ -118,11 +124,25 @@ pub async fn setup(
         );
     }
 
-    let ring_buf = {
+    let malware_events = {
         let map = bpf
             .take_map("events")
             .ok_or_else(|| anyhow!("Map 'events' not found"))?;
         RingBuf::try_from(map)?
+    };
+
+    let dns_queries = {
+        let map = bpf
+            .take_map("dns_queries")
+            .ok_or_else(|| anyhow!("Map 'dns_queries' not found"))?;
+        RingBuf::try_from(map)?
+    };
+
+    let dns_events_lost = {
+        let map = bpf
+            .take_map("dns_events_lost")
+            .ok_or_else(|| anyhow!("Map 'dns_events_lost' not found"))?;
+        PerCpuArray::try_from(map)?
     };
 
     let packet_counts = {
@@ -133,11 +153,13 @@ pub async fn setup(
         Arc::new(Mutex::new(hash))
     };
 
-    Ok((
-        Arc::new(Mutex::new(bpf)),
+    Ok(Loaded {
+        bpf: Arc::new(Mutex::new(bpf)),
         packet_counts,
-        ring_buf,
-        link_id,
+        malware_events,
+        dns_queries,
+        dns_events_lost,
+        xdp_link_id: link_id,
         tc_link_id,
-    ))
+    })
 }

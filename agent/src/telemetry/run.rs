@@ -19,6 +19,7 @@ use opentelemetry_otlp::{MetricExporter, WithExportConfig};
 
 use crate::bpf::{FlowTracker, collect_and_report_metrics, setup, spawn_event_monitor};
 use crate::config::Settings;
+use crate::dns::monitor::spawn_dns_monitor;
 use crate::health;
 use crate::response::ResponseConfig;
 
@@ -90,11 +91,23 @@ pub async fn run(settings: &Settings) -> Result<()> {
     );
 
     let response = ResponseConfig::from_settings(settings);
-    let (bpf_shared, packet_counts, ring_buf, xdp_link_id, tc_link_id) =
-        setup(&settings.bpf_object_file, &hashes, &response).await?;
+    let loaded = setup(
+        &settings.bpf_object_file,
+        &hashes,
+        &response,
+        settings.dns_events,
+    )
+    .await?;
+    let bpf_shared = loaded.bpf;
+    let packet_counts = loaded.packet_counts;
+    let xdp_link_id = loaded.xdp_link_id;
+    let tc_link_id = loaded.tc_link_id;
     let mut flow_tracker = FlowTracker::default();
 
-    spawn_event_monitor(ring_buf, Arc::clone(&domain_mgr));
+    spawn_event_monitor(loaded.malware_events, Arc::clone(&domain_mgr));
+    if settings.dns_events {
+        spawn_dns_monitor(loaded.dns_queries, loaded.dns_events_lost);
+    }
 
     health::mark_ready();
     info!("Agent is ready");
