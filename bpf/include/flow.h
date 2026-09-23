@@ -12,6 +12,7 @@
 #include "budget.h"
 #include "common.h"
 #include "ports.h"
+#include "shape.h"
 #include "structs.h"
 
 const volatile __u8  IS_L3_INTERFACE    = 0;
@@ -121,44 +122,74 @@ static __always_inline struct packet_value *insert_slot(struct packet_key *key)
     return bpf_map_lookup_elem(&packet_counts, key);
 }
 
-static __always_inline struct packet_value *flow_slot(struct packet_key *key)
+static __always_inline struct packet_value *flow_slot(struct packet_key *key, struct packet_key *slot)
 {
     struct packet_value *value = bpf_map_lookup_elem(&packet_counts, key);
-    if (value) { return value; }
+    if (value) {
+        *slot = *key;
+        return value;
+    }
 
     __u32 budget_key            = 0;
     struct budget_state *budget = bpf_map_lookup_elem(&flow_budget, &budget_key);
     __u64 now                   = bpf_ktime_get_ns();
 
-    if (budget && budget_take_full(budget, now, NEW_FLOW_BUDGET)) { return insert_slot(key); }
+    if (budget && budget_take_full(budget, now, NEW_FLOW_BUDGET)) {
+        *slot = *key;
+        return insert_slot(key);
+    }
 
     struct packet_key partial = *key;
     partial.src_port          = 0;
     partial.flags             = KEY_FLAG_AGGREGATED;
 
     value = bpf_map_lookup_elem(&packet_counts, &partial);
-    if (value) { return value; }
-    if (budget && budget_take_partial(budget, now, NEW_FLOW_BUDGET)) { return insert_slot(&partial); }
+    if (value) {
+        *slot = partial;
+        return value;
+    }
+    if (budget && budget_take_partial(budget, now, NEW_FLOW_BUDGET)) {
+        *slot = partial;
+        return insert_slot(&partial);
+    }
 
     struct packet_key merged = *key;
     merged.src_port          = 0;
     merged.dst_port          = 0;
     merged.flags             = KEY_FLAG_AGGREGATED | KEY_FLAG_PORTS_MERGED;
 
+    *slot = merged;
     value = bpf_map_lookup_elem(&packet_counts, &merged);
     if (value) { return value; }
     return insert_slot(&merged);
 }
 
+static __always_inline __u64 clock_swap(struct packet_key *slot, __u64 now)
+{
+    __u64 *last = bpf_map_lookup_elem(&flow_clock, slot);
+    if (last) {
+        __u64 previous = *last;
+        *last          = now;
+        return previous;
+    }
+
+    bpf_map_update_elem(&flow_clock, slot, &now, BPF_NOEXIST);
+    return 0;
+}
+
 static __always_inline void count_flow(struct flow_ctx *fc)
 {
-    struct packet_value *value = flow_slot(&fc->key);
+    struct packet_key slot = {};
+    struct packet_value *value = flow_slot(&fc->key, &slot);
     if (!value) { return; }
+
+    __u64 now = bpf_ktime_get_ns();
+    record_shape(value, fc->ip_bytes, clock_swap(&slot, now), now);
 
     value->count += 1;
     value->ip_bytes += fc->ip_bytes;
     value->payload_size += fc->payload_size;
-    value->timestamp = bpf_ktime_get_ns();
+    value->timestamp = now;
 
     if (fc->tcp_syn && fc->tcp_ack) {
         value->tcp_synack += 1;

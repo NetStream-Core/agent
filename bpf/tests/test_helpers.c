@@ -5,6 +5,7 @@
 #include "budget.h"
 #include "dnsname.h"
 #include "ports.h"
+#include "shape.h"
 
 #define GOOGLE_COM_HASH 4282548222659472292ULL
 #define COM_HASH 17442394860103835407ULL
@@ -165,6 +166,52 @@ static void test_budgets_refill_when_the_window_ends(void)
     assert(state.window_start == start + BUDGET_WINDOW_NS);
 }
 
+static void test_size_bins_are_disjoint_and_ordered(void)
+{
+    assert(size_bin(0) == 0 && size_bin(40) == 0 && size_bin(64) == 0);
+    assert(size_bin(65) == 1 && size_bin(128) == 1);
+    assert(size_bin(129) == 2 && size_bin(256) == 2);
+    assert(size_bin(257) == 3 && size_bin(512) == 3);
+    assert(size_bin(513) == 4 && size_bin(1024) == 4);
+    assert(size_bin(1025) == 5 && size_bin(65535) == 5);
+}
+
+static void test_first_packet_has_no_inter_arrival_time(void)
+{
+    struct packet_value value = {0};
+    record_shape(&value, 60, 0, 5000000);
+    assert(value.size_bins[0] == 1);
+    assert(value.iat_count == 0 && value.iat_sum_us == 0 && value.iat_sumsq_us == 0);
+}
+
+static void test_inter_arrival_moments_accumulate_in_microseconds(void)
+{
+    struct packet_value value = {0};
+    record_shape(&value, 1500, 1000000, 1000000 + 2000000);
+    record_shape(&value, 1500, 3000000, 3000000 + 4000000);
+
+    assert(value.size_bins[5] == 2);
+    assert(value.iat_count == 2);
+    assert(value.iat_sum_us == 2000 + 4000);
+    assert(value.iat_sumsq_us == 2000ULL * 2000 + 4000ULL * 4000);
+}
+
+static void test_inter_arrival_gaps_are_capped(void)
+{
+    struct packet_value value = {0};
+    record_shape(&value, 100, 1, 1 + 60ULL * 1000000000ULL);
+    assert(value.iat_sum_us == IAT_CAP_US);
+    assert(value.iat_sumsq_us == IAT_CAP_US * IAT_CAP_US);
+}
+
+static void test_non_monotonic_clock_is_ignored(void)
+{
+    struct packet_value value = {0};
+    record_shape(&value, 100, 9000, 8000);
+    assert(value.iat_count == 0);
+    assert(value.size_bins[1] == 1);
+}
+
 int main(void)
 {
     test_ephemeral_source_is_collapsed();
@@ -178,6 +225,11 @@ int main(void)
     test_budget_admits_up_to_the_limit_per_window();
     test_partial_budget_is_a_multiple_of_the_full_one_and_independent();
     test_budgets_refill_when_the_window_ends();
+    test_size_bins_are_disjoint_and_ordered();
+    test_first_packet_has_no_inter_arrival_time();
+    test_inter_arrival_moments_accumulate_in_microseconds();
+    test_inter_arrival_gaps_are_capped();
+    test_non_monotonic_clock_is_ignored();
     puts("bpf helper tests passed");
     return 0;
 }

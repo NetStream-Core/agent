@@ -14,6 +14,8 @@ pub struct PacketKey {
     pub flags: u16,
 }
 
+pub const SIZE_BINS: usize = 6;
+
 pub const KEY_FLAG_AGGREGATED: u16 = 1;
 pub const KEY_FLAG_PORTS_MERGED: u16 = 2;
 
@@ -33,12 +35,16 @@ pub struct PacketValue {
     pub tcp_synack: u64,
     pub tcp_fin: u64,
     pub tcp_rst: u64,
+    pub size_bins: [u64; SIZE_BINS],
+    pub iat_count: u64,
+    pub iat_sum_us: u64,
+    pub iat_sumsq_us: u64,
 }
 
 unsafe impl Pod for PacketValue {}
 
 const _: () = assert!(core::mem::size_of::<PacketKey>() == 16);
-const _: () = assert!(core::mem::size_of::<PacketValue>() == 64);
+const _: () = assert!(core::mem::size_of::<PacketValue>() == 136);
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]

@@ -2,6 +2,7 @@
 #define __STRUCTS_H__
 
 #include "budget.h"
+#include "values.h"
 
 struct packet_key
 {
@@ -14,19 +15,7 @@ struct packet_key
     __u16 flags;
 };
 
-struct packet_value {
-    __u64 count;
-    __u64 timestamp;
-    __u64 payload_size;
-    __u64 ip_bytes;
-    __u64 tcp_syn;
-    __u64 tcp_synack;
-    __u64 tcp_fin;
-    __u64 tcp_rst;
-};
-
 _Static_assert(sizeof(struct packet_key) == 16, "packet_key layout is shared with the agent");
-_Static_assert(sizeof(struct packet_value) == 64, "packet_value layout is shared with the agent");
 
 struct malware_event_t {
     __u32 src_ip;
@@ -53,6 +42,14 @@ struct
     __type(value, struct packet_value);
     __uint(max_entries, 10240);
 } packet_counts SEC(".maps");
+
+struct
+{
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __type(key, struct packet_key);
+    __type(value, __u64);
+    __uint(max_entries, 10240);
+} flow_clock SEC(".maps");
 
 struct
 {
