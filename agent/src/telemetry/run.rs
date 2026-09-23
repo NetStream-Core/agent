@@ -25,6 +25,7 @@ use crate::config::Settings;
 use crate::dns::monitor::spawn_dns_monitor;
 use crate::dns::suffixes::PublicSuffixList;
 use crate::health;
+use crate::reload::spawn_blocklist_reload;
 use crate::response::ResponseConfig;
 use crate::telemetry::logs::{EventLog, LogPipeline, init_otlp_logs};
 use crate::telemetry::resource;
@@ -87,7 +88,8 @@ pub async fn run(settings: &Settings) -> Result<()> {
     }
 
     let hashes = domain_mgr_raw.load_from_file(path)?;
-    let domain_mgr = Arc::new(domain_mgr_raw);
+    let malware_domains_file = path.clone();
+    let domain_mgr = Arc::new(tokio::sync::RwLock::new(domain_mgr_raw));
 
     let psl = match PublicSuffixList::load_from_file(&settings.public_suffix_list_file) {
         Ok(psl) => psl,
@@ -142,6 +144,12 @@ pub async fn run(settings: &Settings) -> Result<()> {
         loaded.malware_events,
         Arc::clone(&domain_mgr),
         events.clone(),
+    );
+    spawn_blocklist_reload(
+        Arc::clone(&bpf_shared),
+        Arc::clone(&domain_mgr),
+        malware_domains_file,
+        settings.reload_poll_interval,
     );
     if settings.dns_events {
         spawn_dns_monitor(

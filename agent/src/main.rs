@@ -3,6 +3,7 @@ mod config;
 mod dns;
 mod domain_manager;
 mod health;
+mod reload;
 mod response;
 mod telemetry;
 mod utils;
