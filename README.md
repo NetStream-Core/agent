@@ -16,6 +16,7 @@
 | `bpf/` | eBPF-программы на C (`prog.bpf.c`, заголовки в `bpf/include`, тесты хелперов в `bpf/tests`) |
 | `common/` | структуры, общие для ядра и пользовательской части |
 | `malware_domains.txt` | чёрный список доменов по умолчанию |
+| `public_suffix_list.dat` | список публичных суффиксов (publicsuffix.org, раздел ICANN) для группировки DNS-запросов по зарегистрированному домену |
 
 ## Требования
 
@@ -53,6 +54,7 @@ DNS проверяется на входе (XDP) и на выходе (TC).
 | `HEALTH_PORT` | `8081` | Порт health-сервера |
 | `BPF_OBJECT_FILE` | `bpf/prog.bpf.o` рядом с исходниками | Путь к скомпилированному eBPF-объекту |
 | `MALWARE_DOMAINS_FILE` | `malware_domains.txt` рядом с исходниками | Файл чёрного списка, один домен в строке, `#` начинает комментарий; сопоставление идёт по суффиксу (`evil.com` ловит `a.b.evil.com`) |
+| `PUBLIC_SUFFIX_LIST_FILE` | `public_suffix_list.dat` рядом с исходниками | Список публичных суффиксов (формат publicsuffix.org, раздел ICANN, обновляется вручную заменой файла) для группировки DNS-запросов по зарегистрированному домену; при отсутствии файла агент откатывается на правило «последние два уровня» и пишет предупреждение |
 | `DNS_EVENTS` | `true` | `false` отключает события `netstream.dns.query` и метрики `netstream_dns_qname_*`, проверка блоклиста продолжает работать |
 | `RESPONSE_MODE` | `monitor` | Реакция на домен из блоклиста, см. ниже |
 | `QUARANTINE_TTL_SECS` | `60` | Время карантина источника в режиме `gateway`, больше нуля |
@@ -110,6 +112,8 @@ DNS проверяется на входе (XDP) и на выходе (TC).
 | `netstream_dns_events_lost_total` | counter | нет |
 | `netstream_blocklist_hits_total` | counter | `action` |
 | `netstream_dns_qname_length`, `netstream_dns_qname_entropy`, `netstream_dns_unique_subdomains` | histogram | `direction` |
+
+`netstream_dns_unique_subdomains` и одноимённый атрибут события считают уникальные поддомены зарегистрированного домена (`PUBLIC_SUFFIX_LIST_FILE`), а не «последних двух меток»: для `a.b.example.co.uk` это `example.co.uk`, а не `co.uk`. В список входит только раздел ICANN; частные домены вроде `github.io` или `herokuapp.com` не размечены, поэтому для них группировка совпадает со старым поведением (по последним двум меткам общего доменного имени платформы, а не по-настоящему зарегистрированного домена конкретного пользователя).
 
 ### Ресурс
 

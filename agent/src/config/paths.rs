@@ -14,3 +14,7 @@ pub fn bpf_object() -> PathBuf {
 pub fn malware_domains() -> PathBuf {
     project_root().join("malware_domains.txt")
 }
+
+pub fn public_suffix_list() -> PathBuf {
+    project_root().join("public_suffix_list.dat")
+}

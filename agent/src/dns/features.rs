@@ -1,5 +1,8 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+use super::suffixes::PublicSuffixList;
 
 const MAX_LABEL_LENGTH: usize = 63;
 
@@ -93,36 +96,35 @@ pub fn features(name: &str) -> QueryFeatures {
     }
 }
 
-pub fn split_registered_domain(name: &str) -> (&str, &str) {
-    let mut dots = name.rmatch_indices('.').map(|(index, _)| index);
-    match (dots.next(), dots.next()) {
-        (Some(_), Some(second)) => (&name[..second], &name[second + 1..]),
-        _ => ("", name),
-    }
-}
-
 pub struct SubdomainTracker {
     window: Duration,
     max_domains: usize,
     max_subdomains: usize,
+    psl: Arc<PublicSuffixList>,
     domains: HashMap<String, HashMap<String, Instant>>,
 }
 
 impl SubdomainTracker {
-    pub fn new(window: Duration, max_domains: usize, max_subdomains: usize) -> Self {
+    pub fn new(
+        window: Duration,
+        max_domains: usize,
+        max_subdomains: usize,
+        psl: Arc<PublicSuffixList>,
+    ) -> Self {
         Self {
             window,
             max_domains,
             max_subdomains,
+            psl,
             domains: HashMap::new(),
         }
     }
 
     pub fn observe(&mut self, now: Instant, name: &str) -> usize {
-        let (subdomain, registered) = split_registered_domain(name);
+        let (subdomain, registered) = self.psl.split_registered_domain(name);
         let window = self.window;
 
-        if self.domains.len() >= self.max_domains && !self.domains.contains_key(registered) {
+        if self.domains.len() >= self.max_domains && !self.domains.contains_key(&registered) {
             self.domains
                 .retain(|_, seen| seen.values().any(|&at| now.duration_since(at) <= window));
             if self.domains.len() >= self.max_domains {
@@ -130,11 +132,11 @@ impl SubdomainTracker {
             }
         }
 
-        let seen = self.domains.entry(registered.to_string()).or_default();
+        let seen = self.domains.entry(registered).or_default();
         seen.retain(|_, &mut at| now.duration_since(at) <= window);
 
-        if seen.len() < self.max_subdomains || seen.contains_key(subdomain) {
-            seen.insert(subdomain.to_string(), now);
+        if seen.len() < self.max_subdomains || seen.contains_key(&subdomain) {
+            seen.insert(subdomain, now);
         }
         seen.len()
     }
@@ -222,23 +224,24 @@ mod tests {
         assert!((digits.digit_ratio - 4.0 / 12.0).abs() < 1e-12);
     }
 
+    fn empty_psl() -> Arc<PublicSuffixList> {
+        Arc::new(PublicSuffixList::default())
+    }
+
     #[test]
-    fn registered_domain_is_the_last_two_labels() {
-        assert_eq!(
-            split_registered_domain("a.b.example.com"),
-            ("a.b", "example.com")
-        );
-        assert_eq!(
-            split_registered_domain("www.example.com"),
-            ("www", "example.com")
-        );
-        assert_eq!(split_registered_domain("example.com"), ("", "example.com"));
-        assert_eq!(split_registered_domain("localhost"), ("", "localhost"));
+    fn tracker_groups_subdomains_by_the_public_suffix_list_registered_domain() {
+        let psl = Arc::new(PublicSuffixList::parse("co.uk\ncom\n"));
+        let mut tracker = SubdomainTracker::new(Duration::from_secs(60), 100, 100, psl);
+        let now = Instant::now();
+
+        assert_eq!(tracker.observe(now, "a.example.co.uk"), 1);
+        assert_eq!(tracker.observe(now, "b.example.co.uk"), 2);
+        assert_eq!(tracker.observe(now, "a.other.com"), 1);
     }
 
     #[test]
     fn unique_subdomains_are_counted_per_registered_domain() {
-        let mut tracker = SubdomainTracker::new(Duration::from_secs(60), 100, 100);
+        let mut tracker = SubdomainTracker::new(Duration::from_secs(60), 100, 100, empty_psl());
         let now = Instant::now();
 
         assert_eq!(tracker.observe(now, "a.tunnel.test"), 1);
@@ -250,7 +253,7 @@ mod tests {
 
     #[test]
     fn subdomains_expire_after_the_window() {
-        let mut tracker = SubdomainTracker::new(Duration::from_secs(10), 100, 100);
+        let mut tracker = SubdomainTracker::new(Duration::from_secs(10), 100, 100, empty_psl());
         let start = Instant::now();
 
         tracker.observe(start, "a.tunnel.test");
@@ -262,7 +265,7 @@ mod tests {
 
     #[test]
     fn memory_is_bounded_per_domain_and_overall() {
-        let mut tracker = SubdomainTracker::new(Duration::from_secs(60), 3, 2);
+        let mut tracker = SubdomainTracker::new(Duration::from_secs(60), 3, 2, empty_psl());
         let now = Instant::now();
 
         tracker.observe(now, "a.tunnel.test");
