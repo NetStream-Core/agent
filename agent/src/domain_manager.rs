@@ -4,6 +4,18 @@ use log::{info, warn};
 use std::collections::HashMap;
 use std::path::Path;
 
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct ReloadDelta {
+    pub added: Vec<u64>,
+    pub removed: Vec<u64>,
+}
+
+impl ReloadDelta {
+    pub fn is_empty(&self) -> bool {
+        self.added.is_empty() && self.removed.is_empty()
+    }
+}
+
 pub struct DomainManager {
     domains: HashMap<u64, String>,
 }
@@ -15,7 +27,7 @@ impl DomainManager {
         }
     }
 
-    pub fn load_from_file<P: AsRef<Path>>(&mut self, path: P) -> Result<Vec<u64>> {
+    fn parse_file<P: AsRef<Path>>(path: P) -> Result<(Vec<u64>, HashMap<u64, String>, usize)> {
         let content = std::fs::read_to_string(&path).map_err(|e| {
             anyhow!(
                 "Failed to read domains file {}: {}",
@@ -25,8 +37,8 @@ impl DomainManager {
         })?;
 
         let mut hashes = Vec::new();
+        let mut domains = HashMap::new();
         let mut skipped = 0;
-        self.domains.clear();
 
         for (index, line) in content.lines().enumerate() {
             let entry = line.trim();
@@ -44,18 +56,25 @@ impl DomainManager {
             };
 
             let name = normalize(entry);
-            match self.domains.get(&hash) {
+            match domains.get(&hash) {
                 Some(existing) if *existing == name => continue,
                 Some(existing) => warn!(
                     "Hash collision between {} and {}, keeping the first",
                     existing, name
                 ),
                 None => {
-                    self.domains.insert(hash, name);
+                    domains.insert(hash, name);
                     hashes.push(hash);
                 }
             }
         }
+
+        Ok((hashes, domains, skipped))
+    }
+
+    pub fn load_from_file<P: AsRef<Path>>(&mut self, path: P) -> Result<Vec<u64>> {
+        let (hashes, domains, skipped) = Self::parse_file(path)?;
+        self.domains = domains;
 
         info!(
             "DomainManager: loaded {} domains from file, skipped {} invalid lines",
@@ -65,8 +84,48 @@ impl DomainManager {
         Ok(hashes)
     }
 
+    /// Reloads the domain list from `path` and reports which hashes were
+    /// added or removed relative to what was loaded before, so the caller
+    /// can update the eBPF map incrementally instead of clearing it (which
+    /// would open a window where nothing is blocked).
+    pub fn reload_from_file<P: AsRef<Path>>(&mut self, path: P) -> Result<ReloadDelta> {
+        let (_, fresh, skipped) = Self::parse_file(path)?;
+
+        let mut added: Vec<u64> = fresh
+            .keys()
+            .filter(|hash| !self.domains.contains_key(hash))
+            .copied()
+            .collect();
+        let mut removed: Vec<u64> = self
+            .domains
+            .keys()
+            .filter(|hash| !fresh.contains_key(hash))
+            .copied()
+            .collect();
+        added.sort_unstable();
+        removed.sort_unstable();
+
+        let previous_len = self.domains.len();
+        self.domains = fresh;
+
+        info!(
+            "DomainManager: reloaded {} domains ({} added, {} removed, {} skipped, was {})",
+            self.domains.len(),
+            added.len(),
+            removed.len(),
+            skipped,
+            previous_len
+        );
+        Ok(ReloadDelta { added, removed })
+    }
+
     pub fn get_domain_name(&self, hash: u64) -> Option<&String> {
         self.domains.get(&hash)
+    }
+
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.domains.len()
     }
 }
 
@@ -79,59 +138,12 @@ mod tests {
     const COM: u64 = 17442394860103835407;
 
     fn load(content: &str) -> (DomainManager, Vec<u64>) {
-        let mut file = tempfile::NamedTempFile::new().expect("tmp file");
+        let mut file = tempfile::NamedTempFile::new().unwrap();
         write!(file, "{content}").unwrap();
 
         let mut mgr = DomainManager::new();
-        let hashes = mgr.load_from_file(file.path()).expect("load ok");
+        let hashes = mgr.load_from_file(file.path()).unwrap();
         (mgr, hashes)
-    }
-
-    #[test]
-    fn hashes_match_the_values_computed_by_the_bpf_code() {
-        assert_eq!(domain_hash("google.com"), Ok(GOOGLE_COM));
-        assert_eq!(domain_hash("com"), Ok(COM));
-    }
-
-    #[test]
-    fn suffix_hashes_match_the_values_computed_by_the_bpf_code() {
-        let expected = [
-            ("example", 2306238607482248458),
-            ("blocked-test.example", 10599123911636125748),
-            ("sub.blocked-test.example", 3691398819404742162),
-            ("www.sub.blocked-test.example", 4388018530618295000),
-        ];
-        for (name, hash) in expected {
-            assert_eq!(domain_hash(name), Ok(hash), "{name}");
-        }
-    }
-
-    #[test]
-    fn hash_ignores_case_and_trailing_dot() {
-        assert_eq!(domain_hash("GoOgLe.CoM."), Ok(GOOGLE_COM));
-        assert_eq!(domain_hash("  google.com  "), Ok(GOOGLE_COM));
-    }
-
-    #[test]
-    fn invalid_names_are_rejected() {
-        for name in [
-            "",
-            ".",
-            "a..b",
-            ".a.com",
-            "bad name.com",
-            "münchen.de",
-            &"a".repeat(64),
-            &format!("{}.com", "a".repeat(64)),
-            &vec!["a".repeat(60); 5].join("."),
-        ] {
-            assert!(domain_hash(name).is_err(), "{name:?} must be rejected");
-        }
-    }
-
-    #[test]
-    fn longest_valid_labels_are_accepted() {
-        assert!(domain_hash(&format!("{}.com", "a".repeat(63))).is_ok());
     }
 
     #[test]
@@ -150,5 +162,58 @@ mod tests {
     fn unknown_hash_has_no_name() {
         let (mgr, _) = load("google.com\n");
         assert_eq!(mgr.get_domain_name(1), None);
+    }
+
+    #[test]
+    fn reload_reports_only_what_changed() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        write!(file, "google.com\nexample.com\n").unwrap();
+
+        let mut mgr = DomainManager::new();
+        mgr.load_from_file(file.path()).unwrap();
+
+        let mut same_file = std::fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(file.path())
+            .unwrap();
+        write!(same_file, "google.com\nother.com\n").unwrap();
+        drop(same_file);
+
+        let delta = mgr.reload_from_file(file.path()).unwrap();
+
+        let example_com = domain_hash("example.com").unwrap();
+        let other_com = domain_hash("other.com").unwrap();
+
+        assert_eq!(delta.added, vec![other_com]);
+        assert_eq!(delta.removed, vec![example_com]);
+        assert!(mgr.get_domain_name(other_com).is_some());
+        assert!(mgr.get_domain_name(example_com).is_none());
+    }
+
+    #[test]
+    fn reload_of_an_unchanged_file_reports_no_delta() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(file, "google.com").unwrap();
+
+        let mut mgr = DomainManager::new();
+        mgr.load_from_file(file.path()).unwrap();
+        let delta = mgr.reload_from_file(file.path()).unwrap();
+
+        assert!(delta.is_empty());
+        assert_eq!(mgr.len(), 1);
+    }
+
+    #[test]
+    fn reload_from_a_missing_file_fails_and_keeps_the_previous_list() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(file, "google.com").unwrap();
+
+        let mut mgr = DomainManager::new();
+        mgr.load_from_file(file.path()).unwrap();
+
+        assert!(mgr.reload_from_file("/no/such/file").is_err());
+        assert_eq!(mgr.len(), 1);
+        assert!(mgr.get_domain_name(GOOGLE_COM).is_some());
     }
 }

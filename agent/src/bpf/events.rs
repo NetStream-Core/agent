@@ -4,6 +4,7 @@ use log::{info, warn};
 use opentelemetry::{KeyValue, global};
 use std::{net::Ipv4Addr, sync::Arc};
 use tokio::io::{Interest, unix::AsyncFd};
+use tokio::sync::RwLock;
 
 use crate::domain_manager::DomainManager;
 use crate::telemetry::logs::{EventLog, HitRecord};
@@ -19,7 +20,7 @@ pub fn action_label(action: u32) -> &'static str {
 
 pub fn spawn_event_monitor(
     ring_buf: RingBuf<MapData>,
-    domain_mgr: Arc<DomainManager>,
+    domain_mgr: Arc<RwLock<DomainManager>>,
     events: EventLog,
 ) {
     tokio::spawn(async move {
@@ -55,9 +56,12 @@ pub fn spawn_event_monitor(
                 let action = action_label(event.action);
                 hits.add(1, &[KeyValue::new("action", action)]);
 
-                let domain = domain_mgr
-                    .get_domain_name(event.domain_hash)
-                    .cloned()
+                let name = {
+                    let mgr = domain_mgr.read().await;
+                    mgr.get_domain_name(event.domain_hash).cloned()
+                };
+                let domain = name
+                    .clone()
                     .unwrap_or_else(|| format!("0x{:x}", event.domain_hash));
                 events.blocklist_hit(&HitRecord {
                     src_ip,
@@ -65,7 +69,7 @@ pub fn spawn_event_monitor(
                     action,
                 });
 
-                if let Some(domain) = domain_mgr.get_domain_name(event.domain_hash) {
+                if let Some(domain) = name {
                     info!(
                         "🔴 MALWARE DETECTED! Domain: {} (IP: {}) action={}",
                         domain, src_ip, action

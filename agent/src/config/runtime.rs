@@ -17,6 +17,7 @@ const MIN_FLOW_TABLE_ENTRIES: u32 = 1024;
 const DEFAULT_FLOW_LOG_TOP_N: usize = 2000;
 const DEFAULT_NEW_FLOWS_PER_SECOND: u32 = 100;
 const MIN_NEW_FLOWS_PER_SECOND: u32 = 10;
+const DEFAULT_RELOAD_POLL_MS: u64 = 5000;
 
 #[derive(Debug, Clone)]
 pub struct Settings {
@@ -36,6 +37,7 @@ pub struct Settings {
     pub flow_log_top_n: usize,
     pub new_flows_per_second: u32,
     pub bpf_stats: bool,
+    pub reload_poll_interval: Duration,
 }
 
 impl Settings {
@@ -99,6 +101,11 @@ impl Settings {
 
         let bpf_stats = parse_or(&lookup, "BPF_STATS", true)?;
 
+        let reload_poll_ms = parse_or(&lookup, "RELOAD_POLL_MS", DEFAULT_RELOAD_POLL_MS)?;
+        if reload_poll_ms == 0 {
+            return Err(anyhow!("RELOAD_POLL_MS must be greater than zero"));
+        }
+
         Ok(Self {
             otlp_endpoint,
             report_interval: Duration::from_millis(interval_ms),
@@ -116,6 +123,7 @@ impl Settings {
             flow_log_top_n,
             new_flows_per_second,
             bpf_stats,
+            reload_poll_interval: Duration::from_millis(reload_poll_ms),
         })
     }
 }
@@ -166,6 +174,7 @@ mod tests {
         assert_eq!(s.flow_log_top_n, 2000);
         assert_eq!(s.new_flows_per_second, 100);
         assert!(s.bpf_stats);
+        assert_eq!(s.reload_poll_interval, Duration::from_secs(5));
     }
 
     #[test]
@@ -212,6 +221,18 @@ mod tests {
     }
 
     #[test]
+    fn reload_poll_interval_is_configurable_and_validated() {
+        assert_eq!(
+            settings(&[("RELOAD_POLL_MS", "1000")])
+                .unwrap()
+                .reload_poll_interval,
+            Duration::from_secs(1)
+        );
+        assert!(settings(&[("RELOAD_POLL_MS", "0")]).is_err());
+        assert!(settings(&[("RELOAD_POLL_MS", "soon")]).is_err());
+    }
+
+    #[test]
     fn dns_events_can_be_disabled() {
         assert!(!settings(&[("DNS_EVENTS", "false")]).unwrap().dns_events);
         assert!(settings(&[("DNS_EVENTS", "maybe")]).is_err());
@@ -247,6 +268,7 @@ mod tests {
             ("HEALTH_PORT", "9090"),
             ("MALWARE_DOMAINS_FILE", "/etc/netstream/domains.txt"),
             ("BPF_OBJECT_FILE", "/usr/lib/netstream/prog.bpf.o"),
+            ("RELOAD_POLL_MS", "2000"),
         ])
         .expect("overrides");
 
@@ -261,6 +283,7 @@ mod tests {
             s.bpf_object_file,
             PathBuf::from("/usr/lib/netstream/prog.bpf.o")
         );
+        assert_eq!(s.reload_poll_interval, Duration::from_secs(2));
     }
 
     #[test]
