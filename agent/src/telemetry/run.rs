@@ -23,6 +23,7 @@ use crate::bpf::{
 };
 use crate::config::Settings;
 use crate::dns::monitor::spawn_dns_monitor;
+use crate::dns::suffixes::PublicSuffixList;
 use crate::health;
 use crate::response::ResponseConfig;
 use crate::telemetry::logs::{EventLog, LogPipeline, init_otlp_logs};
@@ -88,6 +89,15 @@ pub async fn run(settings: &Settings) -> Result<()> {
     let hashes = domain_mgr_raw.load_from_file(path)?;
     let domain_mgr = Arc::new(domain_mgr_raw);
 
+    let psl = match PublicSuffixList::load_from_file(&settings.public_suffix_list_file) {
+        Ok(psl) => psl,
+        Err(e) => {
+            warn!("Falling back to the top-level-only registered domain heuristic: {e}");
+            PublicSuffixList::default()
+        }
+    };
+    let psl = Arc::new(psl);
+
     let interface = get_default_interface()?;
     let resource = resource::build(settings.host_id.clone(), &interface);
 
@@ -134,7 +144,12 @@ pub async fn run(settings: &Settings) -> Result<()> {
         events.clone(),
     );
     if settings.dns_events {
-        spawn_dns_monitor(loaded.dns_queries, loaded.dns_events_lost, events.clone());
+        spawn_dns_monitor(
+            loaded.dns_queries,
+            loaded.dns_events_lost,
+            events.clone(),
+            Arc::clone(&psl),
+        );
     }
 
     health::mark_ready();

@@ -24,6 +24,7 @@ pub struct Settings {
     pub report_interval: Duration,
     pub health_addr: SocketAddr,
     pub malware_domains_file: PathBuf,
+    pub public_suffix_list_file: PathBuf,
     pub bpf_object_file: PathBuf,
     pub response_mode: ResponseMode,
     pub quarantine_ttl: Duration,
@@ -58,6 +59,9 @@ impl Settings {
         let malware_domains_file = lookup("MALWARE_DOMAINS_FILE")
             .map(PathBuf::from)
             .unwrap_or_else(paths::malware_domains);
+        let public_suffix_list_file = lookup("PUBLIC_SUFFIX_LIST_FILE")
+            .map(PathBuf::from)
+            .unwrap_or_else(paths::public_suffix_list);
         let bpf_object_file = lookup("BPF_OBJECT_FILE")
             .map(PathBuf::from)
             .unwrap_or_else(paths::bpf_object);
@@ -104,6 +108,7 @@ impl Settings {
             report_interval: Duration::from_millis(interval_ms),
             health_addr: SocketAddr::new(health_host, health_port),
             malware_domains_file,
+            public_suffix_list_file,
             bpf_object_file,
             response_mode,
             quarantine_ttl: Duration::from_secs(quarantine_ttl_secs),
@@ -154,6 +159,7 @@ mod tests {
         assert_eq!(s.report_interval, Duration::from_secs(1));
         assert_eq!(s.health_addr, "127.0.0.1:8081".parse().unwrap());
         assert_eq!(s.malware_domains_file, paths::malware_domains());
+        assert_eq!(s.public_suffix_list_file, paths::public_suffix_list());
         assert_eq!(s.bpf_object_file, paths::bpf_object());
         assert_eq!(s.response_mode, ResponseMode::Monitor);
         assert_eq!(s.quarantine_ttl, Duration::from_secs(60));
@@ -246,6 +252,10 @@ mod tests {
             ("HEALTH_HOST", "0.0.0.0"),
             ("HEALTH_PORT", "9090"),
             ("MALWARE_DOMAINS_FILE", "/etc/netstream/domains.txt"),
+            (
+                "PUBLIC_SUFFIX_LIST_FILE",
+                "/etc/netstream/public_suffix_list.dat",
+            ),
             ("BPF_OBJECT_FILE", "/usr/lib/netstream/prog.bpf.o"),
         ])
         .expect("overrides");
@@ -256,6 +266,10 @@ mod tests {
         assert_eq!(
             s.malware_domains_file,
             PathBuf::from("/etc/netstream/domains.txt")
+        );
+        assert_eq!(
+            s.public_suffix_list_file,
+            PathBuf::from("/etc/netstream/public_suffix_list.dat")
         );
         assert_eq!(
             s.bpf_object_file,
