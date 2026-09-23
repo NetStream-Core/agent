@@ -3,11 +3,13 @@ use common::DnsEvent;
 use log::{debug, warn};
 use opentelemetry::{KeyValue, global};
 use std::net::Ipv4Addr;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{Interest, unix::AsyncFd};
 use tokio::time::interval;
 
 use super::features::{SubdomainTracker, decode_qname, features, qtype_label};
+use super::suffixes::PublicSuffixList;
 use crate::bpf::direction_label;
 use crate::telemetry::logs::{DnsRecord, EventLog};
 
@@ -26,6 +28,7 @@ pub fn spawn_dns_monitor(
     ring_buf: RingBuf<MapData>,
     lost: PerCpuArray<MapData, u64>,
     events: EventLog,
+    psl: Arc<PublicSuffixList>,
 ) {
     tokio::spawn(async move {
         let meter = global::meter("netstream_agent");
@@ -69,6 +72,7 @@ pub fn spawn_dns_monitor(
             SUBDOMAIN_WINDOW,
             MAX_TRACKED_DOMAINS,
             MAX_TRACKED_SUBDOMAINS,
+            psl,
         );
         let mut reported_lost = 0u64;
         let mut lost_tick = interval(LOST_REPORT_INTERVAL);
