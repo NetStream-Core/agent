@@ -90,6 +90,7 @@ pub async fn setup(
 
     let mut bpf = EbpfLoader::new()
         .set_max_entries("packet_counts", options.flow_table_entries)
+        .set_max_entries("flow_clock", options.flow_table_entries)
         .set_global("NEW_FLOW_BUDGET", &new_flow_budget, true)
         .set_global("IS_L3_INTERFACE", &(is_l3 as u8), true)
         .set_global(

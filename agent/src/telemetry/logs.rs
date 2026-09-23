@@ -7,7 +7,7 @@ use std::net::Ipv4Addr;
 use std::time::{Duration, SystemTime};
 
 use crate::dns::features::QueryFeatures;
-use common::{DIRECTION_EGRESS, DIRECTION_INGRESS};
+use common::{DIRECTION_EGRESS, DIRECTION_INGRESS, SIZE_BINS};
 
 pub const EVENT_FLOW: &str = "netstream.flow";
 pub const EVENT_DNS_QUERY: &str = "netstream.dns.query";
@@ -33,6 +33,10 @@ pub struct FlowRecord {
     pub tcp_fin: u64,
     pub tcp_rst: u64,
     pub aggregated: u8,
+    pub size_bins: [u64; SIZE_BINS],
+    pub iat_count: u64,
+    pub iat_sum_us: u64,
+    pub iat_sumsq_us: u64,
 }
 
 pub struct DnsRecord<'a> {
@@ -96,6 +100,15 @@ pub fn flow_attributes(r: &FlowRecord) -> Attributes {
         ("netstream.flow.tcp.fin", int(r.tcp_fin)),
         ("netstream.flow.tcp.rst", int(r.tcp_rst)),
         ("netstream.flow.aggregated", int(r.aggregated.into())),
+        ("netstream.flow.size.le64", int(r.size_bins[0])),
+        ("netstream.flow.size.le128", int(r.size_bins[1])),
+        ("netstream.flow.size.le256", int(r.size_bins[2])),
+        ("netstream.flow.size.le512", int(r.size_bins[3])),
+        ("netstream.flow.size.le1024", int(r.size_bins[4])),
+        ("netstream.flow.size.gt1024", int(r.size_bins[5])),
+        ("netstream.flow.iat.count", int(r.iat_count)),
+        ("netstream.flow.iat.sum_us", int(r.iat_sum_us)),
+        ("netstream.flow.iat.sumsq_us", int(r.iat_sumsq_us)),
     ]
 }
 
@@ -256,6 +269,10 @@ mod tests {
             tcp_fin: 2,
             tcp_rst: 1,
             aggregated: 0,
+            size_bins: [10, 12, 8, 6, 4, 2],
+            iat_count: 41,
+            iat_sum_us: 990000,
+            iat_sumsq_us: 24000000,
         }
     }
 
@@ -274,7 +291,7 @@ mod tests {
     fn flow_attributes_follow_the_contract() {
         let a = as_map(flow_attributes(&flow()));
 
-        assert_eq!(a.len(), 15);
+        assert_eq!(a.len(), 24);
         assert_eq!(string(&a["network.io.direction"]), "receive");
         assert_eq!(string(&a["network.transport"]), "tcp");
         assert_eq!(string(&a["source.address"]), "10.1.2.3");
@@ -290,6 +307,15 @@ mod tests {
         assert_eq!(int_of(&a["netstream.flow.tcp.fin"]), 2);
         assert_eq!(int_of(&a["netstream.flow.tcp.rst"]), 1);
         assert_eq!(int_of(&a["netstream.flow.aggregated"]), 0);
+        assert_eq!(int_of(&a["netstream.flow.size.le64"]), 10);
+        assert_eq!(int_of(&a["netstream.flow.size.le128"]), 12);
+        assert_eq!(int_of(&a["netstream.flow.size.le256"]), 8);
+        assert_eq!(int_of(&a["netstream.flow.size.le512"]), 6);
+        assert_eq!(int_of(&a["netstream.flow.size.le1024"]), 4);
+        assert_eq!(int_of(&a["netstream.flow.size.gt1024"]), 2);
+        assert_eq!(int_of(&a["netstream.flow.iat.count"]), 41);
+        assert_eq!(int_of(&a["netstream.flow.iat.sum_us"]), 990000);
+        assert_eq!(int_of(&a["netstream.flow.iat.sumsq_us"]), 24000000);
     }
 
     #[test]
@@ -384,7 +410,7 @@ mod tests {
         assert_eq!(flow_log.record.event_name(), Some(EVENT_FLOW));
         assert_eq!(flow_log.record.severity_number(), Some(Severity::Info));
         assert!(flow_log.record.timestamp().is_some());
-        assert_eq!(flow_log.record.attributes_iter().count(), 15);
+        assert_eq!(flow_log.record.attributes_iter().count(), 24);
         assert_eq!(
             flow_log
                 .resource

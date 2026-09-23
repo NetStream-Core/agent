@@ -2,7 +2,7 @@ use anyhow::Result;
 use aya::maps::{MapData, PerCpuHashMap};
 use common::{
     DIRECTION_EGRESS, DIRECTION_INGRESS, KEY_FLAG_AGGREGATED, KEY_FLAG_PORTS_MERGED, PacketKey,
-    PacketValue,
+    PacketValue, SIZE_BINS,
 };
 use log;
 use opentelemetry::{KeyValue, global};
@@ -22,6 +22,18 @@ struct Totals {
     tcp_synack: u64,
     tcp_fin: u64,
     tcp_rst: u64,
+    size_bins: [u64; SIZE_BINS],
+    iat_count: u64,
+    iat_sum_us: u64,
+    iat_sumsq_us: u64,
+}
+
+fn add_bins(a: [u64; SIZE_BINS], b: [u64; SIZE_BINS]) -> [u64; SIZE_BINS] {
+    std::array::from_fn(|i| a[i].saturating_add(b[i]))
+}
+
+fn sub_bins(a: [u64; SIZE_BINS], b: [u64; SIZE_BINS]) -> [u64; SIZE_BINS] {
+    std::array::from_fn(|i| a[i].saturating_sub(b[i]))
 }
 
 impl Totals {
@@ -34,6 +46,10 @@ impl Totals {
             tcp_synack: acc.tcp_synack.saturating_add(v.tcp_synack),
             tcp_fin: acc.tcp_fin.saturating_add(v.tcp_fin),
             tcp_rst: acc.tcp_rst.saturating_add(v.tcp_rst),
+            size_bins: add_bins(acc.size_bins, v.size_bins),
+            iat_count: acc.iat_count.saturating_add(v.iat_count),
+            iat_sum_us: acc.iat_sum_us.saturating_add(v.iat_sum_us),
+            iat_sumsq_us: acc.iat_sumsq_us.saturating_add(v.iat_sumsq_us),
         })
     }
 
@@ -49,6 +65,10 @@ impl Totals {
             tcp_synack: self.tcp_synack.saturating_sub(previous.tcp_synack),
             tcp_fin: self.tcp_fin.saturating_sub(previous.tcp_fin),
             tcp_rst: self.tcp_rst.saturating_sub(previous.tcp_rst),
+            size_bins: sub_bins(self.size_bins, previous.size_bins),
+            iat_count: self.iat_count.saturating_sub(previous.iat_count),
+            iat_sum_us: self.iat_sum_us.saturating_sub(previous.iat_sum_us),
+            iat_sumsq_us: self.iat_sumsq_us.saturating_sub(previous.iat_sumsq_us),
         }
     }
 
@@ -56,6 +76,10 @@ impl Totals {
         self.count = self.count.saturating_add(other.count);
         self.payload_size = self.payload_size.saturating_add(other.payload_size);
         self.ip_bytes = self.ip_bytes.saturating_add(other.ip_bytes);
+        self.size_bins = add_bins(self.size_bins, other.size_bins);
+        self.iat_count = self.iat_count.saturating_add(other.iat_count);
+        self.iat_sum_us = self.iat_sum_us.saturating_add(other.iat_sum_us);
+        self.iat_sumsq_us = self.iat_sumsq_us.saturating_add(other.iat_sumsq_us);
         self.add_tcp_flags(other);
     }
 
@@ -320,6 +344,10 @@ pub async fn collect_and_report_metrics(
             tcp_fin: delta.tcp_fin,
             tcp_rst: delta.tcp_rst,
             aggregated: aggregation_level(key.flags),
+            size_bins: delta.size_bins,
+            iat_count: delta.iat_count,
+            iat_sum_us: delta.iat_sum_us,
+            iat_sumsq_us: delta.iat_sumsq_us,
         });
     }
 
@@ -382,6 +410,10 @@ mod tests {
             tcp_synack: 0,
             tcp_fin: 0,
             tcp_rst: 0,
+            size_bins: [0; SIZE_BINS],
+            iat_count: 0,
+            iat_sum_us: 0,
+            iat_sumsq_us: 0,
         }
     }
 
@@ -550,6 +582,14 @@ mod tests {
         b.tcp_syn = 1;
         b.tcp_synack = 4;
         b.tcp_rst = 6;
+        a.size_bins = [1, 2, 0, 0, 0, 0];
+        b.size_bins = [0, 1, 0, 0, 0, 4];
+        a.iat_count = 2;
+        b.iat_count = 3;
+        a.iat_sum_us = 200;
+        b.iat_sum_us = 300;
+        a.iat_sumsq_us = 20000;
+        b.iat_sumsq_us = 30000;
 
         let sum = Totals::from_cpus(&[a, b, value(0, 0)]);
 
@@ -563,8 +603,61 @@ mod tests {
                 tcp_synack: 4,
                 tcp_fin: 1,
                 tcp_rst: 6,
+                size_bins: [1, 3, 0, 0, 0, 4],
+                iat_count: 5,
+                iat_sum_us: 500,
+                iat_sumsq_us: 50000,
             }
         );
+    }
+
+    #[test]
+    fn shape_counters_report_only_the_increase() {
+        let mut tracker = FlowTracker::default();
+        let first = Totals {
+            count: 4,
+            size_bins: [1, 1, 1, 1, 0, 0],
+            iat_count: 3,
+            iat_sum_us: 300,
+            iat_sumsq_us: 30000,
+            ..Totals::default()
+        };
+        let second = Totals {
+            count: 6,
+            size_bins: [1, 1, 1, 1, 2, 0],
+            iat_count: 5,
+            iat_sum_us: 700,
+            iat_sumsq_us: 130000,
+            ..Totals::default()
+        };
+        tracker.advance(key(1), first);
+        let delta = tracker.advance(key(1), second);
+        assert_eq!(delta.size_bins, [0, 0, 0, 0, 2, 0]);
+        assert_eq!(delta.iat_count, 2);
+        assert_eq!(delta.iat_sum_us, 400);
+        assert_eq!(delta.iat_sumsq_us, 100000);
+    }
+
+    #[test]
+    fn aggregation_adds_shape_counters() {
+        let mut total = Totals {
+            size_bins: [1, 0, 0, 0, 0, 0],
+            iat_count: 1,
+            iat_sum_us: 10,
+            iat_sumsq_us: 100,
+            ..Totals::default()
+        };
+        total.accumulate(&Totals {
+            size_bins: [2, 0, 0, 0, 0, 3],
+            iat_count: 2,
+            iat_sum_us: 30,
+            iat_sumsq_us: 500,
+            ..Totals::default()
+        });
+        assert_eq!(total.size_bins, [3, 0, 0, 0, 0, 3]);
+        assert_eq!(total.iat_count, 3);
+        assert_eq!(total.iat_sum_us, 40);
+        assert_eq!(total.iat_sumsq_us, 600);
     }
 
     #[test]
