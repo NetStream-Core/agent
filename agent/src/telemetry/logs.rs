@@ -41,6 +41,7 @@ pub struct FlowRecord {
 
 pub struct DnsRecord<'a> {
     pub direction: u8,
+    pub protocol: u8,
     pub src_ip: Ipv4Addr,
     pub dst_ip: Ipv4Addr,
     pub qtype: &'static str,
@@ -118,6 +119,7 @@ pub fn dns_attributes(r: &DnsRecord) -> Attributes {
             "network.io.direction",
             text(network_io_direction(r.direction)),
         ),
+        ("network.transport", text(network_transport(r.protocol))),
         ("source.address", text(r.src_ip.to_string())),
         ("destination.address", text(r.dst_ip.to_string())),
         ("dns.question.name", text(r.name)),
@@ -345,6 +347,7 @@ mod tests {
         let features = crate::dns::features::features("nb2xgzlsmvzgs3tfebzgk4tp.t.tunnel.test");
         let record = DnsRecord {
             direction: DIRECTION_EGRESS,
+            protocol: 17,
             src_ip: Ipv4Addr::new(192, 168, 1, 10),
             dst_ip: Ipv4Addr::new(192, 168, 1, 1),
             qtype: "TXT",
@@ -355,7 +358,7 @@ mod tests {
 
         let a = as_map(dns_attributes(&record));
 
-        assert_eq!(a.len(), 11);
+        assert_eq!(a.len(), 12);
         assert_eq!(string(&a["network.io.direction"]), "transmit");
         assert_eq!(string(&a["dns.question.name"]), record.name);
         assert_eq!(string(&a["netstream.dns.question.type"]), "TXT");
@@ -435,6 +438,7 @@ mod tests {
         pipeline.events.flow(&flow());
         pipeline.events.dns_query(&DnsRecord {
             direction: DIRECTION_EGRESS,
+            protocol: 17,
             src_ip: Ipv4Addr::new(192, 168, 1, 10),
             dst_ip: Ipv4Addr::new(192, 168, 1, 1),
             qtype: "A",
