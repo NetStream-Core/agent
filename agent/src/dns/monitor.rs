@@ -124,6 +124,7 @@ pub fn spawn_dns_monitor(
 
                         events.dns_query(&DnsRecord {
                             direction: event.direction,
+                            protocol: event.protocol,
                             src_ip: Ipv4Addr::from(u32::from_be(event.src_ip)),
                             dst_ip: Ipv4Addr::from(u32::from_be(event.dst_ip)),
                             qtype,
@@ -164,10 +165,12 @@ mod tests {
         bytes.extend(2u32.to_ne_bytes());
         bytes.extend(qtype.to_ne_bytes());
         bytes.push(direction);
+        bytes.push(17);
         bytes.push(wire.len() as u8);
         let mut name = [0u8; 256];
         name[..wire.len()].copy_from_slice(wire);
         bytes.extend(name);
+        bytes.extend([0u8; 3]);
         bytes
     }
 
@@ -175,19 +178,20 @@ mod tests {
     fn dns_event_is_parsed_from_ring_buffer_bytes() {
         let wire = [3, b'w', b'w', b'w', 3, b'c', b'o', b'm'];
         let bytes = event_bytes(16, 1, &wire);
-        assert_eq!(bytes.len(), 268);
+        assert_eq!(bytes.len(), 272);
 
         let event = DnsEvent::parse(&bytes).expect("parsed");
 
         assert_eq!(event.qtype, 16);
         assert_eq!(event.direction, 1);
+        assert_eq!(event.protocol, 17);
         assert_eq!(event.qname_wire(), wire);
     }
 
     #[test]
     fn short_buffers_are_rejected() {
         let bytes = event_bytes(1, 0, &[1, b'a']);
-        assert!(DnsEvent::parse(&bytes[..267]).is_none());
+        assert!(DnsEvent::parse(&bytes[..271]).is_none());
         assert!(DnsEvent::parse(&[]).is_none());
     }
 }

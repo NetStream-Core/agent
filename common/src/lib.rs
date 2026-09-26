@@ -71,8 +71,10 @@ pub struct DnsEvent {
     pub dst_ip: u32,
     pub qtype: u16,
     pub direction: u8,
+    pub protocol: u8,
     pub qname_len: u8,
     pub qname: [u8; DNS_QNAME_CAPACITY],
+    pub reserved: [u8; 3],
 }
 
 impl DnsEvent {
@@ -87,7 +89,7 @@ impl DnsEvent {
     }
 }
 
-const _: () = assert!(core::mem::size_of::<DnsEvent>() == 268);
+const _: () = assert!(core::mem::size_of::<DnsEvent>() == 272);
 
 pub const ACTION_OBSERVED: u32 = 0;
 pub const ACTION_DROPPED: u32 = 1;

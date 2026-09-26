@@ -114,6 +114,8 @@ DNS проверяется на входе (XDP) и на выходе (TC).
 | `netstream_blocklist_hits_total` | counter | `action` |
 | `netstream_dns_qname_length`, `netstream_dns_qname_entropy`, `netstream_dns_unique_subdomains` | histogram | `direction` |
 
+DNS-запросы разбираются и по UDP, и по TCP/53. Событие `netstream.dns.query` несёт атрибут `network.transport` (`tcp` или `udp`); метрика `netstream_dns_queries_total` по транспорту не разбита. DNS-over-TCP разбирается только если весь запрос (2-байтовая длина и сообщение) поместился в один TCP-сегмент; запрос, разбитый на несколько сегментов, тихо пропускается — пересборка TCP-потока в eBPF не реализована.
+
 `netstream_dns_unique_subdomains` и одноимённый атрибут события считают уникальные поддомены зарегистрированного домена (`PUBLIC_SUFFIX_LIST_FILE`), а не «последних двух меток»: для `a.b.example.co.uk` это `example.co.uk`, а не `co.uk`. В список входит только раздел ICANN; частные домены вроде `github.io` или `herokuapp.com` не размечены, поэтому для них группировка совпадает со старым поведением (по последним двум меткам общего доменного имени платформы, а не по-настоящему зарегистрированного домена конкретного пользователя).
 
 ### Ресурс

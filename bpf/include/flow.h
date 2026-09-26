@@ -26,6 +26,7 @@ struct flow_ctx
     struct packet_key key;
     __u32             ip_bytes;
     __u32             payload_size;
+    void             *dns_data;
     __u8              is_dns;
     __u8              tcp_syn;
     __u8              tcp_ack;
@@ -60,11 +61,6 @@ static __always_inline int is_blocked(__u32 addr)
     return 0;
 }
 
-static __always_inline void *dns_payload(struct iphdr *ip)
-{
-    return (void *)ip + (ip->ihl & 0x0f) * 4 + sizeof(struct udphdr);
-}
-
 static __always_inline int parse_flow(struct iphdr *ip, void *data_end, __u8 direction, struct flow_ctx *fc)
 {
     __u32 ip_header_len = (ip->ihl & 0x0f) * 4;
@@ -97,6 +93,11 @@ static __always_inline int parse_flow(struct iphdr *ip, void *data_end, __u8 dir
         fc->tcp_ack = tcp->ack;
         fc->tcp_fin = tcp->fin;
         fc->tcp_rst = tcp->rst;
+
+        if (fc->key.dst_port == DNS_PORT && fc->payload_size > 2) {
+            fc->is_dns  = 1;
+            fc->dns_data = l4 + tcp_header_len + 2;
+        }
     } else if (ip->protocol == 17) {
         struct udphdr *udp = l4;
         if ((void *)udp + sizeof(*udp) > data_end) { return -1; }
@@ -105,7 +106,11 @@ static __always_inline int parse_flow(struct iphdr *ip, void *data_end, __u8 dir
         fc->key.src_port = BPF_NTOHS(udp->source);
         fc->key.dst_port = BPF_NTOHS(udp->dest);
         fc->payload_size -= sizeof(*udp);
-        fc->is_dns = fc->key.dst_port == DNS_PORT;
+
+        if (fc->key.dst_port == DNS_PORT) {
+            fc->is_dns   = 1;
+            fc->dns_data = l4 + sizeof(*udp);
+        }
     }
 
     if (COLLAPSE_EPHEMERAL && (ip->protocol == 6 || ip->protocol == 17)) {

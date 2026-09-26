@@ -20,11 +20,13 @@ struct dns_event
     __u32 dst_ip;
     __u16 qtype;
     __u8  direction;
+    __u8  protocol;
     __u8  qname_len;
     __u8  qname[DNS_NAME_MAX_LENGTH + 1];
+    __u8  reserved[3];
 };
 
-_Static_assert(sizeof(struct dns_event) == 268, "dns_event layout is shared with the agent");
+_Static_assert(sizeof(struct dns_event) == 272, "dns_event layout is shared with the agent");
 
 struct dns_suffixes
 {

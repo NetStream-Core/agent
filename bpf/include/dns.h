@@ -24,7 +24,7 @@ static __always_inline int is_allowlisted(__u32 addr)
     return bpf_map_lookup_elem(&quarantine_allowlist, &key) != NULL;
 }
 
-static __always_inline int handle_dns(void *data, void *data_end, __u32 src_ip, __u32 dst_ip, __u8 direction)
+static __always_inline int handle_dns(void *data, void *data_end, __u32 src_ip, __u32 dst_ip, __u8 direction, __u8 protocol)
 {
     void *dns_data = data;
     if (dns_data + DNS_HEADER_SIZE > data_end) { return XDP_PASS; }
@@ -40,6 +40,7 @@ static __always_inline int handle_dns(void *data, void *data_end, __u32 src_ip, 
         state->event.src_ip    = src_ip;
         state->event.dst_ip    = dst_ip;
         state->event.direction = direction;
+        state->event.protocol  = protocol;
         if (bpf_ringbuf_output(&dns_queries, &state->event, sizeof(state->event), 0) != 0) {
             __u64 *lost = bpf_map_lookup_elem(&dns_events_lost, &scratch_key);
             if (lost) { *lost += 1; }
