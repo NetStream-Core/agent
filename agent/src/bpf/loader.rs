@@ -2,7 +2,7 @@ use anyhow::{Result, anyhow};
 use aya::programs::tc::SchedClassifierLinkId;
 use aya::programs::xdp::XdpLinkId;
 use aya::{
-    Ebpf, EbpfLoader,
+    Ebpf, EbpfLoader, include_bytes_aligned,
     maps::{
         HashMap, MapData, PerCpuArray, PerCpuHashMap, RingBuf,
         lpm_trie::{Key, LpmTrie},
@@ -10,12 +10,13 @@ use aya::{
     programs::{SchedClassifier, TcAttachType, Xdp, XdpFlags, tc},
 };
 use log::info;
-use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::response::ResponseConfig;
 use common::{PacketKey, PacketValue};
+
+static BPF_OBJECT: &[u8] = include_bytes_aligned!(concat!(env!("OUT_DIR"), "/prog.bpf.o"));
 
 fn is_l3_interface(iface: &str) -> bool {
     let path = format!("/sys/class/net/{iface}/addr_len");
@@ -37,7 +38,6 @@ pub struct Loaded {
 }
 
 pub struct LoadOptions<'a> {
-    pub bpf_object: &'a Path,
     pub interface: &'a str,
     pub dns_events: bool,
     pub flow_table_entries: u32,
@@ -51,7 +51,6 @@ pub async fn setup(
     hashes: &[u64],
     response: &ResponseConfig,
 ) -> Result<Loaded> {
-    let bpf_object = options.bpf_object;
     let interface = options.interface;
     info!("Using network interface: {}", interface);
 
@@ -64,10 +63,6 @@ pub async fn setup(
             "L2/Ethernet"
         }
     );
-
-    if !bpf_object.exists() {
-        return Err(anyhow!("eBPF file not found: {}", bpf_object.display()));
-    }
 
     let (ephemeral_min, ephemeral_max) = options.ephemeral_range;
     info!(
@@ -107,7 +102,7 @@ pub async fn setup(
             &(response.quarantine_ttl.as_nanos() as u64),
             true,
         )
-        .load_file(bpf_object)?;
+        .load(BPF_OBJECT)?;
 
     let program = bpf
         .program_mut("xdp_monitor")

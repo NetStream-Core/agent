@@ -7,10 +7,6 @@ fn project_root() -> PathBuf {
         .to_path_buf()
 }
 
-pub fn bpf_object() -> PathBuf {
-    project_root().join("bpf/prog.bpf.o")
-}
-
 pub fn malware_domains() -> PathBuf {
     project_root().join("malware_domains.txt")
 }

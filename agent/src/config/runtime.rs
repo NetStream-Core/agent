@@ -26,7 +26,6 @@ pub struct Settings {
     pub health_addr: SocketAddr,
     pub malware_domains_file: PathBuf,
     pub public_suffix_list_file: PathBuf,
-    pub bpf_object_file: PathBuf,
     pub response_mode: ResponseMode,
     pub quarantine_ttl: Duration,
     pub allowlist_extra: Vec<Ipv4Prefix>,
@@ -64,10 +63,6 @@ impl Settings {
         let public_suffix_list_file = lookup("PUBLIC_SUFFIX_LIST_FILE")
             .map(PathBuf::from)
             .unwrap_or_else(paths::public_suffix_list);
-        let bpf_object_file = lookup("BPF_OBJECT_FILE")
-            .map(PathBuf::from)
-            .unwrap_or_else(paths::bpf_object);
-
         let response_mode = parse_or(&lookup, "RESPONSE_MODE", ResponseMode::Monitor)?;
 
         let quarantine_ttl_secs =
@@ -116,7 +111,6 @@ impl Settings {
             health_addr: SocketAddr::new(health_host, health_port),
             malware_domains_file,
             public_suffix_list_file,
-            bpf_object_file,
             response_mode,
             quarantine_ttl: Duration::from_secs(quarantine_ttl_secs),
             allowlist_extra,
@@ -168,7 +162,6 @@ mod tests {
         assert_eq!(s.health_addr, "127.0.0.1:8081".parse().unwrap());
         assert_eq!(s.malware_domains_file, paths::malware_domains());
         assert_eq!(s.public_suffix_list_file, paths::public_suffix_list());
-        assert_eq!(s.bpf_object_file, paths::bpf_object());
         assert_eq!(s.response_mode, ResponseMode::Monitor);
         assert_eq!(s.quarantine_ttl, Duration::from_secs(60));
         assert!(s.allowlist_extra.is_empty());
@@ -277,7 +270,6 @@ mod tests {
                 "PUBLIC_SUFFIX_LIST_FILE",
                 "/etc/netstream/public_suffix_list.dat",
             ),
-            ("BPF_OBJECT_FILE", "/usr/lib/netstream/prog.bpf.o"),
             ("RELOAD_POLL_MS", "2000"),
         ])
         .expect("overrides");
@@ -292,10 +284,6 @@ mod tests {
         assert_eq!(
             s.public_suffix_list_file,
             PathBuf::from("/etc/netstream/public_suffix_list.dat")
-        );
-        assert_eq!(
-            s.bpf_object_file,
-            PathBuf::from("/usr/lib/netstream/prog.bpf.o")
         );
         assert_eq!(s.reload_poll_interval, Duration::from_secs(2));
     }

@@ -15,6 +15,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=../bpf/prog.bpf.c");
     println!("cargo:rerun-if-changed=../bpf/include");
 
+    let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR set by cargo");
+    let out_file = Path::new(&out_dir).join("prog.bpf.o");
+
     let system_paths = [
         "/usr/include",
         "/usr/include/x86_64-linux-gnu",
@@ -38,6 +41,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         panic!("Cannot find required eBPF headers on this system!");
     }
 
+    let out_file_str = out_file.to_str().expect("OUT_DIR is valid UTF-8");
     let mut args = vec![
         "-O2",
         "-target",
@@ -46,7 +50,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "-c",
         "../bpf/prog.bpf.c",
         "-o",
-        "../bpf/prog.bpf.o",
+        out_file_str,
     ];
 
     if std::env::var("PROFILE").as_deref() == Ok("debug") {

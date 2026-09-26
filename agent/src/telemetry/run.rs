@@ -121,7 +121,6 @@ pub async fn run(settings: &Settings) -> Result<()> {
     let response = ResponseConfig::from_settings(settings);
     let loaded = setup(
         &LoadOptions {
-            bpf_object: &settings.bpf_object_file,
             interface: &interface,
             dns_events: settings.dns_events,
             flow_table_entries: settings.flow_table_entries,
