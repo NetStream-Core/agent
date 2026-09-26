@@ -836,6 +836,7 @@ dependencies = [
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "pnet",
+ "rand",
  "serde",
  "signal-hook",
  "signal-hook-tokio",

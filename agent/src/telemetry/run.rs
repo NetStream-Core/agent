@@ -101,11 +101,11 @@ pub async fn run(settings: &Settings) -> Result<()> {
     let psl = Arc::new(psl);
 
     let interface = get_default_interface()?;
-    let resource = resource::build(settings.host_id.clone(), &interface);
+    let (resource, boot_id) = resource::build(settings.host_id.clone(), &interface);
 
     let meter_provider = init_otlp_metrics(&settings.otlp_endpoint, resource.clone())?;
     let log_pipeline: Option<LogPipeline> = if settings.export_logs {
-        Some(init_otlp_logs(&settings.otlp_endpoint, resource)?)
+        Some(init_otlp_logs(&settings.otlp_endpoint, resource, &boot_id)?)
     } else {
         None
     };
