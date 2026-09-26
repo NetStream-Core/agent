@@ -4,6 +4,8 @@ use opentelemetry_otlp::{LogExporter, WithExportConfig};
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::logs::{SdkLogger, SdkLoggerProvider};
 use std::net::Ipv4Addr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
 use crate::dns::features::QueryFeatures;
@@ -159,6 +161,8 @@ pub fn hit_attributes(r: &HitRecord) -> Attributes {
 #[derive(Clone, Default)]
 pub struct EventLog {
     logger: Option<SdkLogger>,
+    boot_id: String,
+    sequence: Arc<AtomicU64>,
 }
 
 impl EventLog {
@@ -166,16 +170,25 @@ impl EventLog {
         Self::default()
     }
 
-    pub fn new(logger: SdkLogger) -> Self {
+    pub fn new(logger: SdkLogger, boot_id: impl Into<String>) -> Self {
         Self {
             logger: Some(logger),
+            boot_id: boot_id.into(),
+            sequence: Arc::new(AtomicU64::new(0)),
         }
     }
 
-    fn emit(&self, event: &'static str, severity: Severity, attributes: Attributes) {
+    fn emit(&self, event: &'static str, severity: Severity, mut attributes: Attributes) {
         let Some(logger) = &self.logger else {
             return;
         };
+
+        let sequence = self.sequence.fetch_add(1, Ordering::Relaxed);
+        attributes.push(("netstream.event.sequence", int(sequence)));
+        attributes.push((
+            "netstream.event.id",
+            text(format!("{}-{sequence}", self.boot_id)),
+        ));
 
         let mut record = logger.create_log_record();
         record.set_event_name(event);
@@ -213,7 +226,7 @@ impl LogPipeline {
     }
 }
 
-pub fn init_otlp_logs(endpoint: &str, resource: Resource) -> Result<LogPipeline> {
+pub fn init_otlp_logs(endpoint: &str, resource: Resource, boot_id: &str) -> Result<LogPipeline> {
     let exporter = LogExporter::builder()
         .with_tonic()
         .with_endpoint(endpoint.to_string())
@@ -224,7 +237,7 @@ pub fn init_otlp_logs(endpoint: &str, resource: Resource) -> Result<LogPipeline>
         .with_resource(resource)
         .with_batch_exporter(exporter)
         .build();
-    let events = EventLog::new(provider.logger("netstream_agent"));
+    let events = EventLog::new(provider.logger("netstream_agent"), boot_id);
 
     Ok(LogPipeline { provider, events })
 }
@@ -390,14 +403,13 @@ mod tests {
     #[test]
     fn emitted_records_carry_event_name_severity_attributes_and_resource() {
         let exporter = InMemoryLogExporter::default();
+        let (resource, boot_id) =
+            crate::telemetry::resource::build(Some("sensor-1".into()), "eth0");
         let provider = SdkLoggerProvider::builder()
-            .with_resource(crate::telemetry::resource::build(
-                Some("sensor-1".into()),
-                "eth0",
-            ))
+            .with_resource(resource)
             .with_simple_exporter(exporter.clone())
             .build();
-        let events = EventLog::new(provider.logger("test"));
+        let events = EventLog::new(provider.logger("test"), boot_id.clone());
 
         events.flow(&flow());
         events.blocklist_hit(&HitRecord {
@@ -413,7 +425,16 @@ mod tests {
         assert_eq!(flow_log.record.event_name(), Some(EVENT_FLOW));
         assert_eq!(flow_log.record.severity_number(), Some(Severity::Info));
         assert!(flow_log.record.timestamp().is_some());
-        assert_eq!(flow_log.record.attributes_iter().count(), 24);
+        let flow_attrs: HashMap<String, AnyValue> = flow_log
+            .record
+            .attributes_iter()
+            .map(|(key, value)| (key.as_str().to_string(), value.clone()))
+            .collect();
+        assert_eq!(flow_attrs.len(), 26);
+        assert_eq!(
+            string(&flow_attrs["netstream.event.id"]),
+            format!("{boot_id}-0")
+        );
         assert_eq!(
             flow_log
                 .resource
@@ -422,17 +443,35 @@ mod tests {
                 .as_str(),
             "sensor-1"
         );
+        assert_eq!(
+            flow_log
+                .resource
+                .get(&Key::from_static_str("service.instance.id"))
+                .unwrap()
+                .as_str(),
+            boot_id
+        );
 
-        assert_eq!(emitted[1].record.event_name(), Some(EVENT_BLOCKLIST_HIT));
-        assert_eq!(emitted[1].record.severity_number(), Some(Severity::Warn));
+        let hit_log = &emitted[1];
+        assert_eq!(hit_log.record.event_name(), Some(EVENT_BLOCKLIST_HIT));
+        assert_eq!(hit_log.record.severity_number(), Some(Severity::Warn));
+        let hit_attrs: HashMap<String, AnyValue> = hit_log
+            .record
+            .attributes_iter()
+            .map(|(key, value)| (key.as_str().to_string(), value.clone()))
+            .collect();
+        assert_eq!(
+            string(&hit_attrs["netstream.event.id"]),
+            format!("{boot_id}-1")
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
     #[ignore = "needs a running collector, set OTLP_TEST_ENDPOINT"]
     async fn records_are_exported_to_a_collector() {
         let endpoint = std::env::var("OTLP_TEST_ENDPOINT").expect("OTLP_TEST_ENDPOINT");
-        let resource = crate::telemetry::resource::build(Some("rust-test".into()), "lo");
-        let pipeline = init_otlp_logs(&endpoint, resource).expect("logs pipeline");
+        let (resource, boot_id) = crate::telemetry::resource::build(Some("rust-test".into()), "lo");
+        let pipeline = init_otlp_logs(&endpoint, resource, &boot_id).expect("logs pipeline");
 
         let features = crate::dns::features::features("www.example.com");
         pipeline.events.flow(&flow());
