@@ -403,7 +403,7 @@ mod tests {
     #[test]
     fn emitted_records_carry_event_name_severity_attributes_and_resource() {
         let exporter = InMemoryLogExporter::default();
-        let (resource, boot_id) =
+        let (resource, boot_id, ..) =
             crate::telemetry::resource::build(Some("sensor-1".into()), "eth0");
         let provider = SdkLoggerProvider::builder()
             .with_resource(resource)
@@ -470,7 +470,8 @@ mod tests {
     #[ignore = "needs a running collector, set OTLP_TEST_ENDPOINT"]
     async fn records_are_exported_to_a_collector() {
         let endpoint = std::env::var("OTLP_TEST_ENDPOINT").expect("OTLP_TEST_ENDPOINT");
-        let (resource, boot_id) = crate::telemetry::resource::build(Some("rust-test".into()), "lo");
+        let (resource, boot_id, ..) =
+            crate::telemetry::resource::build(Some("rust-test".into()), "lo");
         let pipeline = init_otlp_logs(&endpoint, resource, &boot_id).expect("logs pipeline");
 
         let features = crate::dns::features::features("www.example.com");

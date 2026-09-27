@@ -18,6 +18,7 @@ const DEFAULT_FLOW_LOG_TOP_N: usize = 2000;
 const DEFAULT_NEW_FLOWS_PER_SECOND: u32 = 100;
 const MIN_NEW_FLOWS_PER_SECOND: u32 = 10;
 const DEFAULT_RELOAD_POLL_MS: u64 = 5000;
+const DEFAULT_CONTROL_PLANE_POLL_MS: u64 = 30_000;
 
 #[derive(Debug, Clone)]
 pub struct Settings {
@@ -38,6 +39,8 @@ pub struct Settings {
     pub new_flows_per_second: u32,
     pub bpf_stats: bool,
     pub reload_poll_interval: Duration,
+    pub control_plane_url: Option<String>,
+    pub control_plane_poll_interval: Duration,
 }
 
 impl Settings {
@@ -105,6 +108,17 @@ impl Settings {
             return Err(anyhow!("RELOAD_POLL_MS must be greater than zero"));
         }
 
+        let control_plane_url =
+            lookup("CONTROL_PLANE_URL").map(|raw| raw.trim_end_matches('/').to_string());
+        let control_plane_poll_ms = parse_or(
+            &lookup,
+            "CONTROL_PLANE_POLL_MS",
+            DEFAULT_CONTROL_PLANE_POLL_MS,
+        )?;
+        if control_plane_poll_ms == 0 {
+            return Err(anyhow!("CONTROL_PLANE_POLL_MS must be greater than zero"));
+        }
+
         Ok(Self {
             otlp_endpoint,
             report_interval: Duration::from_millis(interval_ms),
@@ -123,6 +137,8 @@ impl Settings {
             new_flows_per_second,
             bpf_stats,
             reload_poll_interval: Duration::from_millis(reload_poll_ms),
+            control_plane_url,
+            control_plane_poll_interval: Duration::from_millis(control_plane_poll_ms),
         })
     }
 }
@@ -174,6 +190,24 @@ mod tests {
         assert_eq!(s.new_flows_per_second, 100);
         assert!(s.bpf_stats);
         assert_eq!(s.reload_poll_interval, Duration::from_secs(5));
+        assert_eq!(s.control_plane_url, None);
+        assert_eq!(s.control_plane_poll_interval, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn control_plane_url_is_configurable_and_trailing_slash_is_stripped() {
+        let s = settings(&[("CONTROL_PLANE_URL", "http://backend:8080/")]).unwrap();
+        assert_eq!(s.control_plane_url.as_deref(), Some("http://backend:8080"));
+
+        let s = settings(&[
+            ("CONTROL_PLANE_URL", "http://backend:8080"),
+            ("CONTROL_PLANE_POLL_MS", "5000"),
+        ])
+        .unwrap();
+        assert_eq!(s.control_plane_poll_interval, Duration::from_secs(5));
+
+        assert!(settings(&[("CONTROL_PLANE_POLL_MS", "0")]).is_err());
+        assert!(settings(&[("CONTROL_PLANE_POLL_MS", "soon")]).is_err());
     }
 
     #[test]

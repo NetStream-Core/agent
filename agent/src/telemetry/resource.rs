@@ -30,29 +30,38 @@ pub fn resolve_host_id(
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-/// Returns the process resource and the `boot_id` embedded in it
-/// (`service.instance.id`), so callers that need it for per-event
-/// identifiers don't have to read it back out of the `Resource`.
-pub fn build(configured_host_id: Option<String>, interface: &str) -> (Resource, String) {
+/// Returns the process resource, the `boot_id` embedded in it
+/// (`service.instance.id`), and the resolved `host_id`/`hostname`, so
+/// callers that need those for per-event identifiers or for registering
+/// with the control plane don't have to re-derive them from
+/// `/proc`/`/etc` themselves.
+pub fn build(
+    configured_host_id: Option<String>,
+    interface: &str,
+) -> (Resource, String, String, Option<String>) {
     let hostname = std::fs::read_to_string("/proc/sys/kernel/hostname").ok();
     let machine_id = std::fs::read_to_string("/etc/machine-id").ok();
     let host_id = resolve_host_id(configured_host_id, machine_id, hostname.clone());
     let boot_id = generate_boot_id();
 
+    let resolved_hostname = non_empty(hostname);
+
     let mut attributes = vec![
         KeyValue::new("service.name", SERVICE_NAME),
         KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
         KeyValue::new("service.instance.id", boot_id.clone()),
-        KeyValue::new("host.id", host_id),
+        KeyValue::new("host.id", host_id.clone()),
         KeyValue::new("network.interface.name", interface.to_string()),
     ];
-    if let Some(name) = non_empty(hostname) {
+    if let Some(name) = resolved_hostname.clone() {
         attributes.push(KeyValue::new("host.name", name));
     }
 
     (
         Resource::builder().with_attributes(attributes).build(),
         boot_id,
+        host_id,
+        resolved_hostname,
     )
 }
 
@@ -93,7 +102,7 @@ mod tests {
 
     #[test]
     fn resource_carries_the_identity_attributes() {
-        let (resource, boot_id) = build(Some("sensor-1".into()), "eth0");
+        let (resource, boot_id, host_id, _) = build(Some("sensor-1".into()), "eth0");
         let get = |key: &'static str| resource.get(&Key::from_static_str(key));
 
         assert_eq!(get("service.name").unwrap().as_str(), SERVICE_NAME);
@@ -101,12 +110,13 @@ mod tests {
         assert_eq!(get("network.interface.name").unwrap().as_str(), "eth0");
         assert!(get("service.version").is_some());
         assert_eq!(get("service.instance.id").unwrap().as_str(), boot_id);
+        assert_eq!(host_id, "sensor-1");
     }
 
     #[test]
     fn boot_id_is_different_on_every_call() {
-        let (_, first) = build(Some("sensor-1".into()), "eth0");
-        let (_, second) = build(Some("sensor-1".into()), "eth0");
+        let (_, first, ..) = build(Some("sensor-1".into()), "eth0");
+        let (_, second, ..) = build(Some("sensor-1".into()), "eth0");
         assert_ne!(first, second);
     }
 }

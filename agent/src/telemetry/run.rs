@@ -101,7 +101,8 @@ pub async fn run(settings: &Settings) -> Result<()> {
     let psl = Arc::new(psl);
 
     let interface = get_default_interface()?;
-    let (resource, boot_id) = resource::build(settings.host_id.clone(), &interface);
+    let (resource, boot_id, host_id, hostname) =
+        resource::build(settings.host_id.clone(), &interface);
 
     let meter_provider = init_otlp_metrics(&settings.otlp_endpoint, resource.clone())?;
     let log_pipeline: Option<LogPipeline> = if settings.export_logs {
@@ -117,6 +118,18 @@ pub async fn run(settings: &Settings) -> Result<()> {
         "OpenTelemetry OTLP pipeline initialized targeting {}",
         settings.otlp_endpoint
     );
+
+    if let Some(base_url) = &settings.control_plane_url {
+        crate::control_plane::spawn(
+            reqwest::Client::new(),
+            base_url.clone(),
+            host_id.clone(),
+            hostname.clone(),
+            env!("CARGO_PKG_VERSION").to_string(),
+            settings.control_plane_poll_interval,
+        );
+        info!("Control plane polling enabled, targeting {base_url}");
+    }
 
     let response = ResponseConfig::from_settings(settings);
     let loaded = setup(

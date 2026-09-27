@@ -1,5 +1,6 @@
 mod bpf;
 mod config;
+mod control_plane;
 mod dns;
 mod domain_manager;
 mod health;
