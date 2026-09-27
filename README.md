@@ -153,7 +153,12 @@ DNS-запросы разбираются и по UDP, и по TCP/53. Собы�
 
 ## Control plane
 
-Если задана `CONTROL_PLANE_URL`, агент на каждом тике `CONTROL_PLANE_POLL_MS` регистрируется в `backend` (`POST /api/v1/sensors/register` — заодно это и heartbeat, обновляющий `last_seen`) и проверяет `GET /api/v1/sensors/:host_id/config`. Появление новой `config_version` только логируется (`INFO`, версия и payload целиком) — применение содержимого payload к работающему агенту (`response_mode`, `QUARANTINE_TTL_SECS`, `QUARANTINE_ALLOWLIST`) пока не реализовано, это следующий шаг.
+Если задана `CONTROL_PLANE_URL`, агент на каждом тике `CONTROL_PLANE_POLL_MS` регистрируется в `backend` (`POST /api/v1/sensors/register` — заодно это и heartbeat, обновляющий `last_seen`) и проверяет `GET /api/v1/sensors/:host_id/config`. При появлении новой `config_version`:
+
+- `payload.allowlist_extra` (массив строк в том же формате, что и `QUARANTINE_ALLOWLIST`: `"10.0.0.1"`, `"192.168.0.0/16"`) применяется сразу же, без перезапуска — агент вставляет/удаляет только изменившиеся записи в живой eBPF-карте `quarantine_allowlist`, тем же способом, каким `RELOAD_POLL_MS` обновляет блок-лист доменов. Локальные адреса, DNS-резолверы, шлюз по умолчанию и статический `QUARANTINE_ALLOWLIST` (посчитанные один раз при старте) не трогаются, даже если один и тот же префикс на время появился и в remote-списке.
+- `payload.response_mode` и `payload.quarantine_ttl_secs` **не применяются** — `bpf/loader.rs` запекает `RESPONSE_MODE`/`QUARANTINE_TTL_NS` в `.rodata` программы через `EbpfLoader::set_global` при загрузке; верификатор трактует их как константы, обновить их можно только полной перезагрузкой eBPF-программы, а не записью в карту. Если payload содержит эти поля, агент один раз предупреждает в логе, что для них нужен перезапуск.
+
+Весь payload логируется целиком (`INFO`) при каждой смене версии, независимо от того, что из него получилось применить.
 
 Отсутствие `CONTROL_PLANE_URL` или недоступность `backend` не влияют на основную работу агента: ошибки регистрации/опроса только логируются как предупреждение, цикл захвата трафика продолжает работать как есть.
 
