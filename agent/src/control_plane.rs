@@ -1,7 +1,9 @@
 //! Talks to the backend control plane (`backend/internal/api`): registers
 //! this sensor, periodically checks whether an operator has pushed a new
-//! desired config version, and applies what it can of that config to the
-//! running agent.
+//! desired config version, applies what it can of that config to the
+//! running agent, and acks back the version it actually applied — closing
+//! the desired/actual loop the backend's `sensors.actual_config_version`
+//! is there to track.
 //!
 //! The control plane is optional and the agent must keep monitoring traffic
 //! whether or not one is configured or reachable: every request failure is
@@ -68,6 +70,11 @@ struct RegisterRequest<'a> {
     agent_version: &'a str,
 }
 
+#[derive(Debug, Serialize)]
+struct AckConfigRequest {
+    version: i64,
+}
+
 #[derive(Debug, serde::Deserialize)]
 struct AgentConfigResponse {
     version: i64,
@@ -109,6 +116,25 @@ async fn fetch_config(
         return Ok(None);
     }
     Ok(Some(response.error_for_status()?.json().await?))
+}
+
+/// Reports the config version the agent has actually applied (see the
+/// `actual_config_version` column and `PUT .../config/ack` in
+/// `backend/internal/sensors`), so an operator watching the fleet can tell
+/// "sent" apart from "converged" rather than assuming every sensor catches
+/// up to the desired version instantly.
+async fn ack_config(
+    client: &reqwest::Client,
+    base_url: &str,
+    host_id: &str,
+    version: i64,
+) -> Result<(), reqwest::Error> {
+    let response = client
+        .put(format!("{base_url}/api/v1/sensors/{host_id}/config/ack"))
+        .json(&AckConfigRequest { version })
+        .send()
+        .await?;
+    response.error_for_status().map(|_| ())
 }
 
 fn allowlist_key(prefix: &Ipv4Prefix) -> Key<u32> {
@@ -251,7 +277,18 @@ pub fn spawn(options: SpawnOptions) {
                     )
                     .await
                     {
-                        Ok(()) => applied_remote_allowlist = new_remote_allowlist,
+                        Ok(()) => {
+                            applied_remote_allowlist = new_remote_allowlist;
+                            if let Err(e) =
+                                ack_config(&client, &base_url, &host_id, config.version).await
+                            {
+                                warn!(
+                                    "Failed to ack applied config version {} to the control \
+                                     plane: {e}",
+                                    config.version
+                                );
+                            }
+                        }
                         Err(e) => warn!("Failed to apply allowlist_extra to the eBPF map: {e}"),
                     }
 
@@ -426,6 +463,26 @@ qGLp\n\
         let result = fetch_config(&client, &base_url, "sensor-1").await.unwrap();
 
         assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn ack_config_succeeds_on_a_2xx_response() {
+        let base_url = respond_once("HTTP/1.1 200 OK", "{}");
+        let client = reqwest::Client::new();
+
+        let result = ack_config(&client, &base_url, "sensor-1", 3).await;
+
+        assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn ack_config_reports_an_error_on_a_4xx_response() {
+        let base_url = respond_once("HTTP/1.1 404 Not Found", "{\"error\":\"sensor not found\"}");
+        let client = reqwest::Client::new();
+
+        let result = ack_config(&client, &base_url, "no-such-sensor", 3).await;
+
+        assert!(result.is_err());
     }
 
     #[tokio::test]
