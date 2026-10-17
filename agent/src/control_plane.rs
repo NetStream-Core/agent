@@ -21,18 +21,44 @@
 //! compile-time constant — changing them for real would mean reloading the
 //! whole eBPF program, not writing to a map, so a config that sets them
 //! just gets a warning instead of silently being ignored.
+//!
+//! The connection itself is TLS if `CONTROL_PLANE_URL` is `https://`, so a
+//! MITM on the network between the agent and the backend cannot tamper with
+//! the desired config in transit (`build_client`). This is server-side TLS
+//! only — the backend's certificate is checked, the agent presents no
+//! client certificate — so it does not by itself let the backend verify
+//! *which* agent is talking to it.
 
 use crate::response::{Ipv4Prefix, ResponseConfig};
+use anyhow::Context;
 use aya::Ebpf;
 use aya::maps::lpm_trie::{Key, LpmTrie};
 use log::{info, warn};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashSet;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::time::interval;
+
+/// Builds the HTTP client used to talk to the control plane. Without
+/// `ca_file` it trusts only the platform's own root certificates (works
+/// against a backend with a certificate from a real CA); with it, the PEM
+/// file's certificate is trusted in addition — needed for the lab's
+/// self-signed backend certificate, which is in no system trust store.
+pub fn build_client(ca_file: Option<&Path>) -> anyhow::Result<reqwest::Client> {
+    let mut builder = reqwest::Client::builder();
+    if let Some(path) = ca_file {
+        let pem = std::fs::read(path)
+            .with_context(|| format!("read CONTROL_PLANE_CA_FILE {}", path.display()))?;
+        let cert = reqwest::Certificate::from_pem(&pem)
+            .with_context(|| format!("parse CONTROL_PLANE_CA_FILE {} as PEM", path.display()))?;
+        builder = builder.add_root_certificate(cert);
+    }
+    builder.build().context("build control plane HTTP client")
+}
 
 #[derive(Debug, Serialize)]
 struct RegisterRequest<'a> {
@@ -244,6 +270,87 @@ mod tests {
     use serde_json::json;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+
+    // A throwaway self-signed certificate (openssl req -x509 -newkey rsa:2048
+    // -nodes -days 3650 -subj "/CN=test"), used only to check that a valid
+    // PEM is accepted; it signs nothing real and is not a secret.
+    const TEST_CERT_PEM: &str = "-----BEGIN CERTIFICATE-----\n\
+MIIC/zCCAeegAwIBAgIURdK3jpfqCkuwvw/Ea+lRqQ89yScwDQYJKoZIhvcNAQEL\n\
+BQAwDzENMAsGA1UEAwwEdGVzdDAeFw0yNjA5MjcxODI3NDFaFw0zNjA5MjQxODI3\n\
+NDFaMA8xDTALBgNVBAMMBHRlc3QwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEK\n\
+AoIBAQD5pWyITNVx0+HKIvsu6eJSq7s+o+9r80t4hIr4Nb1goAAscrtAUo29Thkr\n\
+sM2IHKzA1qfRavSIHZkiuh+ZkGva3wU3ESYQXD0B9pYXQx5jyjhJRKJ/jazkIWaS\n\
+ZecKCjV6cTQO9rhVP8LR6FI4m2zFZHVOta0R0W4ZXOn56accwzCT9bUnN16ieyXu\n\
+GVBO4z6EbiFGt5XlrA32vuLHAlCsGnyQebgrrRg/HtvVXiyFGqbmO4JRKakC8r5g\n\
+oPiVJSm0VygTmx2xi5bGifvY9qrsUZI4p1IDi2bHO29hgkd51215T5ElN4kMOEDH\n\
+kZ9LENDoLhXgnsNrDB9nR9KNoSAzAgMBAAGjUzBRMB0GA1UdDgQWBBQskfTwGEin\n\
+oTsFvLwhQKjsS6JGoTAfBgNVHSMEGDAWgBQskfTwGEinoTsFvLwhQKjsS6JGoTAP\n\
+BgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3DQEBCwUAA4IBAQDQY6Go6F1s7pKNQQNf\n\
+CiEldNYjHpf9DZ2V0fhXC+4jgDn2Q0VABDBrseWkCbuqy4UIoIDFLwUGiFl1t+H/\n\
+s54mLu/QYyt6hfzvCs7eBO3ZNW+5YG/3CQghRHtlEgcGEhT9MoHJyToCYDEuU6yr\n\
+Srnt9536vuLPch1YLBnwzd3IhsOipQGKPOZVkFGRQi8yBj0OMhhaeFF7JIox97Ad\n\
+Dt95WUfDVcfrLhmTIKR0XQTc6NtK5bd3OHootbgkZoP8PAP7VlG5qiZ3/67Fkf23\n\
+1pjnBW59C57oaB5aAEEtZ4b0RS64TTYLN7kvj9LF2inZbjqxnaUlJOhAthXmizI7\n\
+qGLp\n\
+-----END CERTIFICATE-----\n";
+
+    #[test]
+    fn build_client_without_a_ca_file_succeeds() {
+        assert!(build_client(None).is_ok());
+    }
+
+    #[test]
+    fn build_client_with_a_valid_ca_file_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ca.pem");
+        std::fs::write(&path, TEST_CERT_PEM).unwrap();
+
+        assert!(build_client(Some(&path)).is_ok());
+    }
+
+    #[test]
+    fn build_client_with_a_missing_ca_file_fails() {
+        let result = build_client(Some(Path::new("/no/such/file.pem")));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn build_client_with_an_invalid_pem_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ca.pem");
+        std::fs::write(
+            &path,
+            "-----BEGIN CERTIFICATE-----\nnot valid base64 content!!!\n-----END CERTIFICATE-----\n",
+        )
+        .unwrap();
+
+        let result = build_client(Some(&path));
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "needs a running control-plane backend over TLS, set CONTROL_PLANE_TLS_TEST_URL \
+                and CONTROL_PLANE_TLS_TEST_CA"]
+    async fn register_and_fetch_config_work_over_a_real_tls_connection() {
+        let base_url =
+            std::env::var("CONTROL_PLANE_TLS_TEST_URL").expect("CONTROL_PLANE_TLS_TEST_URL");
+        let ca_path =
+            std::env::var("CONTROL_PLANE_TLS_TEST_CA").expect("CONTROL_PLANE_TLS_TEST_CA");
+
+        let client = build_client(Some(Path::new(&ca_path))).expect("build TLS client");
+
+        register(&client, &base_url, "tls-e2e-sensor", None, "0.1.0")
+            .await
+            .expect("register over TLS");
+
+        let config = fetch_config(&client, &base_url, "tls-e2e-sensor")
+            .await
+            .expect("fetch config over TLS");
+        assert!(
+            config.is_none(),
+            "a freshly registered sensor has no config yet"
+        );
+    }
 
     fn prefix(s: &str) -> Ipv4Prefix {
         s.parse().expect("valid prefix")

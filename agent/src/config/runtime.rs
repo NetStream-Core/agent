@@ -41,6 +41,7 @@ pub struct Settings {
     pub reload_poll_interval: Duration,
     pub control_plane_url: Option<String>,
     pub control_plane_poll_interval: Duration,
+    pub control_plane_ca_file: Option<PathBuf>,
 }
 
 impl Settings {
@@ -118,6 +119,7 @@ impl Settings {
         if control_plane_poll_ms == 0 {
             return Err(anyhow!("CONTROL_PLANE_POLL_MS must be greater than zero"));
         }
+        let control_plane_ca_file = lookup("CONTROL_PLANE_CA_FILE").map(PathBuf::from);
 
         Ok(Self {
             otlp_endpoint,
@@ -139,6 +141,7 @@ impl Settings {
             reload_poll_interval: Duration::from_millis(reload_poll_ms),
             control_plane_url,
             control_plane_poll_interval: Duration::from_millis(control_plane_poll_ms),
+            control_plane_ca_file,
         })
     }
 }
@@ -192,6 +195,16 @@ mod tests {
         assert_eq!(s.reload_poll_interval, Duration::from_secs(5));
         assert_eq!(s.control_plane_url, None);
         assert_eq!(s.control_plane_poll_interval, Duration::from_secs(30));
+        assert_eq!(s.control_plane_ca_file, None);
+    }
+
+    #[test]
+    fn control_plane_ca_file_is_configurable() {
+        let s = settings(&[("CONTROL_PLANE_CA_FILE", "/etc/netstream/ca.pem")]).unwrap();
+        assert_eq!(
+            s.control_plane_ca_file,
+            Some(PathBuf::from("/etc/netstream/ca.pem"))
+        );
     }
 
     #[test]

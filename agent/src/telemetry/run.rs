@@ -152,17 +152,22 @@ pub async fn run(settings: &Settings) -> Result<()> {
         settings.reload_poll_interval,
     );
     if let Some(base_url) = &settings.control_plane_url {
-        crate::control_plane::spawn(crate::control_plane::SpawnOptions {
-            client: reqwest::Client::new(),
-            base_url: base_url.clone(),
-            host_id: host_id.clone(),
-            hostname: hostname.clone(),
-            agent_version: env!("CARGO_PKG_VERSION").to_string(),
-            poll_interval: settings.control_plane_poll_interval,
-            bpf: Arc::clone(&bpf_shared),
-            response: response.clone(),
-        });
-        info!("Control plane polling enabled, targeting {base_url}");
+        match crate::control_plane::build_client(settings.control_plane_ca_file.as_deref()) {
+            Ok(client) => {
+                crate::control_plane::spawn(crate::control_plane::SpawnOptions {
+                    client,
+                    base_url: base_url.clone(),
+                    host_id: host_id.clone(),
+                    hostname: hostname.clone(),
+                    agent_version: env!("CARGO_PKG_VERSION").to_string(),
+                    poll_interval: settings.control_plane_poll_interval,
+                    bpf: Arc::clone(&bpf_shared),
+                    response: response.clone(),
+                });
+                info!("Control plane polling enabled, targeting {base_url}");
+            }
+            Err(e) => warn!("Control plane disabled, failed to build its HTTP client: {e}"),
+        }
     }
     if settings.dns_events {
         spawn_dns_monitor(
