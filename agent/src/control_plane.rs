@@ -22,7 +22,10 @@
 //! `EbpfLoader::set_global` at load time, which the verifier treats as a
 //! compile-time constant — changing them for real would mean reloading the
 //! whole eBPF program, not writing to a map, so a config that sets them
-//! just gets a warning instead of silently being ignored.
+//! just gets a warning instead of silently being ignored — and the ack for
+//! that version lists them in `unapplied_fields` rather than claiming the
+//! version converged cleanly, so the backend's `actual_config_version`
+//! can't be read as "fully applied" when it only means "received".
 //!
 //! The connection itself is TLS if `CONTROL_PLANE_URL` is `https://`, so a
 //! MITM on the network between the agent and the backend cannot tamper with
@@ -73,6 +76,14 @@ struct RegisterRequest<'a> {
 #[derive(Debug, Serialize)]
 struct AckConfigRequest {
     version: i64,
+    /// Payload keys this version set that the agent could not actually
+    /// apply (currently always a subset of `response_mode`,
+    /// `quarantine_ttl_secs` — see the module docs). Empty means every
+    /// field the payload set was applied. The backend stores this
+    /// alongside `actual_config_version` so an operator can tell "the
+    /// agent is on version N" apart from "the agent is on version N and
+    /// actually running what N asked for".
+    unapplied_fields: Vec<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -128,13 +139,30 @@ async fn ack_config(
     base_url: &str,
     host_id: &str,
     version: i64,
+    unapplied_fields: Vec<String>,
 ) -> Result<(), reqwest::Error> {
     let response = client
         .put(format!("{base_url}/api/v1/sensors/{host_id}/config/ack"))
-        .json(&AckConfigRequest { version })
+        .json(&AckConfigRequest {
+            version,
+            unapplied_fields,
+        })
         .send()
         .await?;
     response.error_for_status().map(|_| ())
+}
+
+/// Which of `payload`'s keys this agent build cannot hot-apply —
+/// `response_mode`/`quarantine_ttl_secs` require reloading the eBPF
+/// program (see the module docs), not just writing to a map, so a config
+/// that sets them is only ever partially applied until the next restart.
+fn unapplied_payload_fields(payload: &Value) -> Vec<String> {
+    const UNSUPPORTED: &[&str] = &["response_mode", "quarantine_ttl_secs"];
+    UNSUPPORTED
+        .iter()
+        .filter(|field| payload.get(**field).is_some())
+        .map(|field| field.to_string())
+        .collect()
 }
 
 fn allowlist_key(prefix: &Ipv4Prefix) -> Key<u32> {
@@ -257,14 +285,14 @@ pub fn spawn(options: SpawnOptions) {
                         "Control plane pushed config version {} for {host_id}: {}",
                         config.version, config.payload
                     );
-                    if config.payload.get("response_mode").is_some()
-                        || config.payload.get("quarantine_ttl_secs").is_some()
-                    {
+                    let unapplied = unapplied_payload_fields(&config.payload);
+                    if !unapplied.is_empty() {
                         warn!(
-                            "Config version {} sets response_mode/quarantine_ttl_secs, but \
-                             hot-applying those isn't supported yet — restart the agent to \
-                             pick them up",
-                            config.version
+                            "Config version {} sets {}, but hot-applying those isn't supported \
+                             yet — restart the agent to pick them up. Acking as partially \
+                             applied, not as fully converged.",
+                            config.version,
+                            unapplied.join(", ")
                         );
                     }
 
@@ -280,7 +308,8 @@ pub fn spawn(options: SpawnOptions) {
                         Ok(()) => {
                             applied_remote_allowlist = new_remote_allowlist;
                             if let Err(e) =
-                                ack_config(&client, &base_url, &host_id, config.version).await
+                                ack_config(&client, &base_url, &host_id, config.version, unapplied)
+                                    .await
                             {
                                 warn!(
                                     "Failed to ack applied config version {} to the control \
@@ -465,12 +494,32 @@ qGLp\n\
         assert!(result.is_none());
     }
 
+    #[test]
+    fn unapplied_payload_fields_is_empty_for_a_fully_hot_applicable_payload() {
+        let payload = json!({"allowlist_extra": ["10.0.0.1"]});
+        assert!(unapplied_payload_fields(&payload).is_empty());
+    }
+
+    #[test]
+    fn unapplied_payload_fields_flags_response_mode_and_quarantine_ttl() {
+        let payload = json!({"response_mode": "enforce", "quarantine_ttl_secs": 60});
+        let mut unapplied = unapplied_payload_fields(&payload);
+        unapplied.sort();
+        assert_eq!(unapplied, vec!["quarantine_ttl_secs", "response_mode"]);
+    }
+
+    #[test]
+    fn unapplied_payload_fields_flags_only_the_fields_actually_present() {
+        let payload = json!({"response_mode": "enforce", "allowlist_extra": []});
+        assert_eq!(unapplied_payload_fields(&payload), vec!["response_mode"]);
+    }
+
     #[tokio::test]
     async fn ack_config_succeeds_on_a_2xx_response() {
         let base_url = respond_once("HTTP/1.1 200 OK", "{}");
         let client = reqwest::Client::new();
 
-        let result = ack_config(&client, &base_url, "sensor-1", 3).await;
+        let result = ack_config(&client, &base_url, "sensor-1", 3, Vec::new()).await;
 
         assert!(result.is_ok(), "{result:?}");
     }
@@ -480,7 +529,7 @@ qGLp\n\
         let base_url = respond_once("HTTP/1.1 404 Not Found", "{\"error\":\"sensor not found\"}");
         let client = reqwest::Client::new();
 
-        let result = ack_config(&client, &base_url, "no-such-sensor", 3).await;
+        let result = ack_config(&client, &base_url, "no-such-sensor", 3, Vec::new()).await;
 
         assert!(result.is_err());
     }
