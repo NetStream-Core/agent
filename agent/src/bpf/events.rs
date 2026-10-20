@@ -29,13 +29,17 @@ pub fn spawn_event_monitor(
             .with_description("Blocked domain detections by response action")
             .build();
 
-        let mut async_fd = match AsyncFd::with_interest(ring_buf, Interest::READABLE) {
-            Ok(fd) => fd,
-            Err(e) => {
-                warn!("Failed to create AsyncFd: {e}");
-                return;
-            }
-        };
+        // SAFETY: `ring_buf`'s fd is backed by the eBPF map it was opened
+        // from and stays open and stable for as long as `ring_buf` (now
+        // owned by the AsyncFd) is alive.
+        let mut async_fd =
+            match unsafe { AsyncFd::register_with_interest(ring_buf, Interest::READABLE) } {
+                Ok(fd) => fd,
+                Err(e) => {
+                    warn!("Failed to create AsyncFd: {e}");
+                    return;
+                }
+            };
 
         loop {
             let mut guard = match async_fd.readable_mut().await {

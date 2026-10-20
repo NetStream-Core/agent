@@ -1,6 +1,6 @@
 use opentelemetry::KeyValue;
 use opentelemetry_sdk::Resource;
-use rand::Rng;
+use rand::RngExt;
 
 pub const SERVICE_NAME: &str = "netstream-monitor-agent";
 
