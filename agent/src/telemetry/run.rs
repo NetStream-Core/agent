@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use aya::Ebpf;
 use aya::programs::tc::SchedClassifierLinkId;
 use aya::programs::xdp::XdpLinkId;
@@ -7,6 +7,7 @@ use futures_util::StreamExt;
 use log::{info, warn};
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook_tokio::Signals;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::time::interval;
@@ -15,7 +16,8 @@ use opentelemetry::global;
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
 
-use opentelemetry_otlp::{MetricExporter, WithExportConfig};
+use opentelemetry_otlp::tonic_types::transport::{Certificate, ClientTlsConfig};
+use opentelemetry_otlp::{MetricExporter, WithExportConfig, WithTonicConfig};
 
 use crate::bpf::{
     CollectContext, FlowTracker, LoadOptions, OverheadReporter, collect_and_report_metrics, setup,
@@ -31,12 +33,36 @@ use crate::telemetry::logs::{EventLog, LogPipeline, init_otlp_logs};
 use crate::telemetry::resource;
 use crate::utils::{ephemeral_port_range, get_default_interface};
 
-fn init_otlp_metrics(endpoint: &str, resource: Resource) -> Result<SdkMeterProvider> {
-    let exporter = MetricExporter::builder()
+/// Reads a PEM file into a tonic `ClientTlsConfig` trusting that certificate
+/// in addition to the platform's own roots — needed for the lab's
+/// self-signed `otel-edge` certificate, which is in no system trust store.
+/// `None` (no `OTEL_EXPORTER_OTLP_CERTIFICATE`) means use the platform
+/// roots only, which is correct for an endpoint with a certificate from a
+/// real CA and a no-op for a plain (non-TLS) endpoint.
+fn otlp_tls_config(ca_file: Option<&Path>) -> Result<Option<ClientTlsConfig>> {
+    let Some(path) = ca_file else {
+        return Ok(None);
+    };
+    let pem = std::fs::read(path)
+        .with_context(|| format!("read OTEL_EXPORTER_OTLP_CERTIFICATE {}", path.display()))?;
+    Ok(Some(
+        ClientTlsConfig::new().ca_certificate(Certificate::from_pem(pem)),
+    ))
+}
+
+fn init_otlp_metrics(
+    endpoint: &str,
+    resource: Resource,
+    tls: Option<ClientTlsConfig>,
+) -> Result<SdkMeterProvider> {
+    let mut builder = MetricExporter::builder()
         .with_tonic()
         .with_endpoint(endpoint.to_string())
-        .with_timeout(Duration::from_secs(2))
-        .build()?;
+        .with_timeout(Duration::from_secs(2));
+    if let Some(tls) = tls {
+        builder = builder.with_tls_config(tls);
+    }
+    let exporter = builder.build()?;
 
     let reader = PeriodicReader::builder(exporter)
         .with_interval(Duration::from_secs(5))
@@ -104,9 +130,16 @@ pub async fn run(settings: &Settings) -> Result<()> {
     let (resource, boot_id, host_id, hostname) =
         resource::build(settings.host_id.clone(), &interface);
 
-    let meter_provider = init_otlp_metrics(&settings.otlp_endpoint, resource.clone())?;
+    let otlp_tls = otlp_tls_config(settings.otlp_ca_file.as_deref())?;
+    let meter_provider =
+        init_otlp_metrics(&settings.otlp_endpoint, resource.clone(), otlp_tls.clone())?;
     let log_pipeline: Option<LogPipeline> = if settings.export_logs {
-        Some(init_otlp_logs(&settings.otlp_endpoint, resource, &boot_id)?)
+        Some(init_otlp_logs(
+            &settings.otlp_endpoint,
+            resource,
+            &boot_id,
+            otlp_tls,
+        )?)
     } else {
         None
     };
@@ -230,4 +263,52 @@ pub async fn run(settings: &Settings) -> Result<()> {
 
     info!("Agent stopped gracefully");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A throwaway self-signed certificate (openssl req -x509 -newkey
+    // rsa:2048 -nodes -days 3650 -subj "/CN=test"), used only to check that
+    // a valid PEM is accepted; it signs nothing real and is not a secret.
+    const TEST_CERT_PEM: &str = "-----BEGIN CERTIFICATE-----\n\
+MIIC/zCCAeegAwIBAgIURdK3jpfqCkuwvw/Ea+lRqQ89yScwDQYJKoZIhvcNAQEL\n\
+BQAwDzENMAsGA1UEAwwEdGVzdDAeFw0yNjA5MjcxODI3NDFaFw0zNjA5MjQxODI3\n\
+NDFaMA8xDTALBgNVBAMMBHRlc3QwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEK\n\
+AoIBAQD5pWyITNVx0+HKIvsu6eJSq7s+o+9r80t4hIr4Nb1goAAscrtAUo29Thkr\n\
+sM2IHKzA1qfRavSIHZkiuh+ZkGva3wU3ESYQXD0B9pYXQx5jyjhJRKJ/jazkIWaS\n\
+ZecKCjV6cTQO9rhVP8LR6FI4m2zFZHVOta0R0W4ZXOn56accwzCT9bUnN16ieyXu\n\
+GVBO4z6EbiFGt5XlrA32vuLHAlCsGnyQebgrrRg/HtvVXiyFGqbmO4JRKakC8r5g\n\
+oPiVJSm0VygTmx2xi5bGifvY9qrsUZI4p1IDi2bHO29hgkd51215T5ElN4kMOEDH\n\
+kZ9LENDoLhXgnsNrDB9nR9KNoSAzAgMBAAGjUzBRMB0GA1UdDgQWBBQskfTwGEin\n\
+oTsFvLwhQKjsS6JGoTAfBgNVHSMEGDAWgBQskfTwGEinoTsFvLwhQKjsS6JGoTAP\n\
+BgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3DQEBCwUAA4IBAQDQY6Go6F1s7pKNQQNf\n\
+CiEldNYjHpf9DZ2V0fhXC+4jgDn2Q0VABDBrseWkCbuqy4UIoIDFLwUGiFl1t+H/\n\
+s54mLu/QYyt6hfzvCs7eBO3ZNW+5YG/3CQghRHtlEgcGEhT9MoHJyToCYDEuU6yr\n\
+Srnt9536vuLPch1YLBnwzd3IhsOipQGKPOZVkFGRQi8yBj0OMhhaeFF7JIox97Ad\n\
+Dt95WUfDVcfrLhmTIKR0XQTc6NtK5bd3OHootbgkZoP8PAP7VlG5qiZ3/67Fkf23\n\
+1pjnBW59C57oaB5aAEEtZ4b0RS64TTYLN7kvj9LF2inZbjqxnaUlJOhAthXmizI7\n\
+qGLp\n\
+-----END CERTIFICATE-----\n";
+
+    #[test]
+    fn otlp_tls_config_without_a_ca_file_is_none() {
+        assert!(otlp_tls_config(None).unwrap().is_none());
+    }
+
+    #[test]
+    fn otlp_tls_config_with_a_valid_ca_file_is_some() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("otlp-ca.pem");
+        std::fs::write(&path, TEST_CERT_PEM).unwrap();
+
+        assert!(otlp_tls_config(Some(&path)).unwrap().is_some());
+    }
+
+    #[test]
+    fn otlp_tls_config_with_a_missing_ca_file_fails() {
+        let result = otlp_tls_config(Some(Path::new("/no/such/file.pem")));
+        assert!(result.is_err());
+    }
 }

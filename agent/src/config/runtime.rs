@@ -42,6 +42,7 @@ pub struct Settings {
     pub control_plane_url: Option<String>,
     pub control_plane_poll_interval: Duration,
     pub control_plane_ca_file: Option<PathBuf>,
+    pub otlp_ca_file: Option<PathBuf>,
 }
 
 impl Settings {
@@ -120,6 +121,11 @@ impl Settings {
             return Err(anyhow!("CONTROL_PLANE_POLL_MS must be greater than zero"));
         }
         let control_plane_ca_file = lookup("CONTROL_PLANE_CA_FILE").map(PathBuf::from);
+        // The standard OTel env var for this (see
+        // https://opentelemetry.io/docs/specs/otel/protocol/exporter/), not
+        // a project-specific name like CONTROL_PLANE_CA_FILE, since this
+        // one configures a signal the OTel SDK itself owns end to end.
+        let otlp_ca_file = lookup("OTEL_EXPORTER_OTLP_CERTIFICATE").map(PathBuf::from);
 
         Ok(Self {
             otlp_endpoint,
@@ -142,6 +148,7 @@ impl Settings {
             control_plane_url,
             control_plane_poll_interval: Duration::from_millis(control_plane_poll_ms),
             control_plane_ca_file,
+            otlp_ca_file,
         })
     }
 }
@@ -205,6 +212,20 @@ mod tests {
             s.control_plane_ca_file,
             Some(PathBuf::from("/etc/netstream/ca.pem"))
         );
+    }
+
+    #[test]
+    fn otlp_ca_file_is_configurable() {
+        let s = settings(&[(
+            "OTEL_EXPORTER_OTLP_CERTIFICATE",
+            "/etc/netstream/otlp-ca.pem",
+        )])
+        .unwrap();
+        assert_eq!(
+            s.otlp_ca_file,
+            Some(PathBuf::from("/etc/netstream/otlp-ca.pem"))
+        );
+        assert_eq!(settings(&[]).unwrap().otlp_ca_file, None);
     }
 
     #[test]

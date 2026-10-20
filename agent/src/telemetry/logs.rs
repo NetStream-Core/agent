@@ -1,6 +1,7 @@
 use anyhow::Result;
 use opentelemetry::logs::{AnyValue, LogRecord, Logger, LoggerProvider, Severity};
-use opentelemetry_otlp::{LogExporter, WithExportConfig};
+use opentelemetry_otlp::tonic_types::transport::ClientTlsConfig;
+use opentelemetry_otlp::{LogExporter, WithExportConfig, WithTonicConfig};
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::logs::{SdkLogger, SdkLoggerProvider};
 use std::net::Ipv4Addr;
@@ -226,12 +227,20 @@ impl LogPipeline {
     }
 }
 
-pub fn init_otlp_logs(endpoint: &str, resource: Resource, boot_id: &str) -> Result<LogPipeline> {
-    let exporter = LogExporter::builder()
+pub fn init_otlp_logs(
+    endpoint: &str,
+    resource: Resource,
+    boot_id: &str,
+    tls: Option<ClientTlsConfig>,
+) -> Result<LogPipeline> {
+    let mut builder = LogExporter::builder()
         .with_tonic()
         .with_endpoint(endpoint.to_string())
-        .with_timeout(EXPORT_TIMEOUT)
-        .build()?;
+        .with_timeout(EXPORT_TIMEOUT);
+    if let Some(tls) = tls {
+        builder = builder.with_tls_config(tls);
+    }
+    let exporter = builder.build()?;
 
     let provider = SdkLoggerProvider::builder()
         .with_resource(resource)
@@ -467,12 +476,21 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    #[ignore = "needs a running collector, set OTLP_TEST_ENDPOINT"]
+    #[ignore = "needs a running collector, set OTLP_TEST_ENDPOINT (and, for a \
+                TLS endpoint, OTEL_EXPORTER_OTLP_CERTIFICATE)"]
     async fn records_are_exported_to_a_collector() {
         let endpoint = std::env::var("OTLP_TEST_ENDPOINT").expect("OTLP_TEST_ENDPOINT");
+        let tls = std::env::var("OTEL_EXPORTER_OTLP_CERTIFICATE")
+            .ok()
+            .map(|path| {
+                let pem = std::fs::read(&path).expect("read OTEL_EXPORTER_OTLP_CERTIFICATE");
+                ClientTlsConfig::new().ca_certificate(
+                    opentelemetry_otlp::tonic_types::transport::Certificate::from_pem(pem),
+                )
+            });
         let (resource, boot_id, ..) =
             crate::telemetry::resource::build(Some("rust-test".into()), "lo");
-        let pipeline = init_otlp_logs(&endpoint, resource, &boot_id).expect("logs pipeline");
+        let pipeline = init_otlp_logs(&endpoint, resource, &boot_id, tls).expect("logs pipeline");
 
         let features = crate::dns::features::features("www.example.com");
         pipeline.events.flow(&flow());
