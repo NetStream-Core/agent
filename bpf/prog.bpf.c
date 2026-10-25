@@ -28,10 +28,12 @@ int xdp_monitor(struct xdp_md *ctx)
 
     debug_printk("rx: proto=%d src=%x dst=%x\n", fc.key.protocol, fc.key.src_ip, fc.key.dst_ip);
 
-    if (fc.is_dns) {
-        int result = handle_dns(fc.dns_data, data_end, fc.key.src_ip, fc.key.dst_ip, fc.key.direction, fc.key.protocol);
+    if (fc.is_dns_udp) {
+        int result =
+            handle_dns(fc.dns_data, fc.dns_data_end, fc.key.src_ip, fc.key.dst_ip, fc.key.direction, fc.key.protocol);
         if (result != XDP_PASS) { return result; }
     }
+    if (fc.dns_tcp_verdict >= 0 && fc.dns_tcp_verdict != XDP_PASS) { return fc.dns_tcp_verdict; }
 
     count_flow(&fc);
     return XDP_PASS;
@@ -51,10 +53,12 @@ int tc_dns_monitor(struct __sk_buff *skb)
 
     debug_printk("tx: proto=%d src=%x dst=%x\n", fc.key.protocol, fc.key.src_ip, fc.key.dst_ip);
 
-    if (fc.is_dns) {
-        int result = handle_dns(fc.dns_data, data_end, fc.key.src_ip, fc.key.dst_ip, fc.key.direction, fc.key.protocol);
+    if (fc.is_dns_udp) {
+        int result =
+            handle_dns(fc.dns_data, fc.dns_data_end, fc.key.src_ip, fc.key.dst_ip, fc.key.direction, fc.key.protocol);
         if (result == XDP_DROP) { return TC_ACT_SHOT; }
     }
+    if (fc.dns_tcp_verdict == XDP_DROP) { return TC_ACT_SHOT; }
 
     count_flow(&fc);
     return TC_ACT_OK;

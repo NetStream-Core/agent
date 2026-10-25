@@ -27,12 +27,25 @@ struct flow_ctx
     __u32             ip_bytes;
     __u32             payload_size;
     void             *dns_data;
-    __u8              is_dns;
+    void             *dns_data_end;
+    // Set only for UDP DNS, where dns_data is always a plain packet
+    // pointer and prog.bpf.c's shared `handle_dns(fc.dns_data, ...)`
+    // call site is safe. TCP DNS calls handle_dns itself, from inside
+    // reassemble_dns_tcp (see dns_tcp.h for why), and reports its
+    // verdict through dns_tcp_verdict instead — the two paths are kept
+    // entirely separate so no single stack slot or call site ever sees
+    // both a packet pointer and a map-value pointer for the same field.
+    __u8              is_dns_udp;
+    // XDP_PASS/XDP_DROP from handle_dns if a TCP segment completed a
+    // message this packet, -1 ("no verdict") otherwise — see is_dns_udp.
+    int               dns_tcp_verdict;
     __u8              tcp_syn;
     __u8              tcp_ack;
     __u8              tcp_fin;
     __u8              tcp_rst;
 };
+
+#include "dns_tcp.h" // needs struct flow_ctx above
 
 static __always_inline struct iphdr *locate_ip(void *data, void *data_end)
 {
@@ -63,6 +76,8 @@ static __always_inline int is_blocked(__u32 addr)
 
 static __always_inline int parse_flow(struct iphdr *ip, void *data_end, __u8 direction, struct flow_ctx *fc)
 {
+    fc->dns_tcp_verdict = -1;
+
     __u32 ip_header_len = (ip->ihl & 0x0f) * 4;
     if (ip_header_len < sizeof(*ip)) { return -1; }
     if ((void *)ip + ip_header_len > data_end) { return -1; }
@@ -94,9 +109,8 @@ static __always_inline int parse_flow(struct iphdr *ip, void *data_end, __u8 dir
         fc->tcp_fin = tcp->fin;
         fc->tcp_rst = tcp->rst;
 
-        if (fc->key.dst_port == DNS_PORT && fc->payload_size > 2) {
-            fc->is_dns  = 1;
-            fc->dns_data = l4 + tcp_header_len + 2;
+        if (fc->key.dst_port == DNS_PORT) {
+            fc->dns_tcp_verdict = reassemble_dns_tcp(fc, l4 + tcp_header_len, data_end);
         }
     } else if (ip->protocol == 17) {
         struct udphdr *udp = l4;
@@ -108,8 +122,9 @@ static __always_inline int parse_flow(struct iphdr *ip, void *data_end, __u8 dir
         fc->payload_size -= sizeof(*udp);
 
         if (fc->key.dst_port == DNS_PORT) {
-            fc->is_dns   = 1;
-            fc->dns_data = l4 + sizeof(*udp);
+            fc->is_dns_udp   = 1;
+            fc->dns_data     = l4 + sizeof(*udp);
+            fc->dns_data_end = data_end;
         }
     }
 
